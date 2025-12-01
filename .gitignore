@@ -3,6 +3,7 @@
 /target
 **/*.rs.bk
 Cargo.lock
+.DS_Store
 
 # Release and distribution artifacts
 *.zip
