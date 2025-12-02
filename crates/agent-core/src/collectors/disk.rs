@@ -93,23 +93,23 @@ impl Collector for DiskCollector {
                 metrics
                     .disk_read_ops_total
                     .with_label_values(&[dev.as_str()])
-                    .inc_by(rd_ops_delta as u64);
+                    .inc_by(rd_ops_delta);
                 metrics
                     .disk_write_ops_total
                     .with_label_values(&[dev.as_str()])
-                    .inc_by(wr_ops_delta as u64);
+                    .inc_by(wr_ops_delta);
                 metrics
                     .disk_read_bytes_total
                     .with_label_values(&[dev.as_str()])
-                    .inc_by(rd_bytes_delta as u64);
+                    .inc_by(rd_bytes_delta);
                 metrics
                     .disk_written_bytes_total
                     .with_label_values(&[dev.as_str()])
-                    .inc_by(wr_bytes_delta as u64);
+                    .inc_by(wr_bytes_delta);
                 metrics
                     .disk_io_time_ms_total
                     .with_label_values(&[dev.as_str()])
-                    .inc_by(io_ms_delta as u64);
+                    .inc_by(io_ms_delta);
 
                 if dt > 0.0
                     && root_io_ms_delta.is_none()

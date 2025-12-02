@@ -146,6 +146,7 @@ Local TSDB:
 - 2h on-disk blocks (`samples.jsonl` + `index.json`) with label hashes and per-metric counts.
 - Periodic flush (30s) and flush-on-shutdown; retention + disk budget pruning.
 - Export for backfill: `GET /tsdb/export?from=...&to=...&metrics=esnode_*` returns newline Prom-compatible samples.
+  Storage is JSON Lines per time block under `local_tsdb_path`.
 ```
 
 Common control-plane commands:

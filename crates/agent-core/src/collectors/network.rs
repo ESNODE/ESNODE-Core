@@ -100,7 +100,11 @@ impl Collector for NetworkCollector {
             }
         }
 
-        if let Some(map) = read_netdev() {
+        let map = tokio::task::spawn_blocking(read_netdev)
+            .await
+            .ok()
+            .flatten();
+        if let Some(map) = map {
             for (iface, v) in map.iter() {
                 let prev = self.previous.entry(iface.clone()).or_default();
                 let rxp = v.rx_packets.saturating_sub(prev.rx_packets);

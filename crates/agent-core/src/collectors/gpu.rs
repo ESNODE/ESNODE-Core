@@ -2,16 +2,14 @@
 use async_trait::async_trait;
 #[cfg(feature = "gpu")]
 use nvml_wrapper::{
-    bitmasks::nv_link::PacketTypes,
     bitmasks::device::ThrottleReasons,
-    enum_wrappers::device::{
-        Clock, EccCounter, MemoryError, PcieUtilCounter, TemperatureSensor,
-    },
+    bitmasks::nv_link::PacketTypes,
+    enum_wrappers::device::{Clock, EccCounter, MemoryError, PcieUtilCounter, TemperatureSensor},
     enum_wrappers::nv_link::{ErrorCounter as NvLinkErrorCounter, UtilizationCountUnit},
-    enums::nv_link::Counter as NvLinkCounter,
     enums::device::PcieLinkMaxSpeed,
-    Nvml,
+    enums::nv_link::Counter as NvLinkCounter,
     struct_wrappers::nv_link::UtilizationControl,
+    Nvml,
 };
 use prometheus::GaugeVec;
 use std::collections::HashMap;
@@ -111,8 +109,10 @@ impl Collector for GpuCollector {
                     .pcie_bandwidth_percent
                     .with_label_values(&[gpu_label.as_str()])
                     .set(0.0);
-                let mut status = GpuStatus::default();
-                status.gpu = gpu_label.clone();
+                let mut status = GpuStatus {
+                    gpu: gpu_label.clone(),
+                    ..Default::default()
+                };
 
                 if let Ok(util) = device.utilization_rates() {
                     metrics
@@ -230,10 +230,12 @@ impl Collector for GpuCollector {
                     }
                 }
                 if let Ok(reasons) = device.current_throttle_reasons() {
-                    let thermal =
-                        reasons.intersects(ThrottleReasons::HW_THERMAL_SLOWDOWN | ThrottleReasons::SW_THERMAL_SLOWDOWN);
-                    let power = reasons
-                        .intersects(ThrottleReasons::HW_POWER_BRAKE_SLOWDOWN | ThrottleReasons::SW_POWER_CAP);
+                    let thermal = reasons.intersects(
+                        ThrottleReasons::HW_THERMAL_SLOWDOWN | ThrottleReasons::SW_THERMAL_SLOWDOWN,
+                    );
+                    let power = reasons.intersects(
+                        ThrottleReasons::HW_POWER_BRAKE_SLOWDOWN | ThrottleReasons::SW_POWER_CAP,
+                    );
                     set_throttle_metric(
                         &metrics.gpu_throttle_reason,
                         gpu_label.as_str(),
@@ -305,13 +307,13 @@ impl Collector for GpuCollector {
 
                         // Estimate bandwidth percent if we have throughput + link info
                         if let (Some(tx_kb), Some(rx_kb)) = (last_tx_kb, last_rx_kb) {
-                            if let (Ok(max_speed), Ok(width)) =
-                                (device.pcie_link_max_speed(), device.current_pcie_link_width())
-                            {
+                            if let (Ok(max_speed), Ok(width)) = (
+                                device.pcie_link_max_speed(),
+                                device.current_pcie_link_width(),
+                            ) {
                                 let bytes_per_s = ((tx_kb + rx_kb) as f64) * 1024.0;
-                                let lane_budget_bytes = pcie_lane_bytes_per_sec(max_speed)
-                                    * (width as f64)
-                                    .max(1.0);
+                                let lane_budget_bytes =
+                                    pcie_lane_bytes_per_sec(max_speed) * (width as f64).max(1.0);
                                 if lane_budget_bytes > 0.0 {
                                     let pct = (bytes_per_s / lane_budget_bytes).min(1.0) * 100.0;
                                     metrics
@@ -352,18 +354,23 @@ impl Collector for GpuCollector {
                                 if util.receive >= prev_rx {
                                     metrics
                                         .gpu_nvlink_rx_bytes_total
-                                        .with_label_values(&[gpu_label.as_str(), link_label.as_str()])
+                                        .with_label_values(&[
+                                            gpu_label.as_str(),
+                                            link_label.as_str(),
+                                        ])
                                         .inc_by(util.receive - prev_rx);
                                 }
                                 if util.send >= prev_tx {
                                     metrics
                                         .gpu_nvlink_tx_bytes_total
-                                        .with_label_values(&[gpu_label.as_str(), link_label.as_str()])
+                                        .with_label_values(&[
+                                            gpu_label.as_str(),
+                                            link_label.as_str(),
+                                        ])
                                         .inc_by(util.send - prev_tx);
                                 }
                             }
-                            self.nvlink_util_prev
-                                .insert(key, (util.receive, util.send));
+                            self.nvlink_util_prev.insert(key, (util.receive, util.send));
                         }
 
                         for (counter, label) in [
@@ -378,9 +385,10 @@ impl Collector for GpuCollector {
                                 if val >= prev {
                                     metrics
                                         .gpu_nvlink_errors_total
-                                        .with_label_values(
-                                            &[gpu_label.as_str(), link_label.as_str()],
-                                        )
+                                        .with_label_values(&[
+                                            gpu_label.as_str(),
+                                            link_label.as_str(),
+                                        ])
                                         .inc_by(val - prev);
                                 }
                                 self.nvlink_err_prev.insert(key, val);
@@ -467,11 +475,11 @@ fn set_throttle_metric(vec: &GaugeVec, gpu: &str, reason: &str, active: bool) {
 #[cfg(feature = "gpu")]
 fn pcie_lane_bytes_per_sec(speed: PcieLinkMaxSpeed) -> f64 {
     match speed {
-        PcieLinkMaxSpeed::MegabytesPerSecond2500 => 2_500_000.0,
-        PcieLinkMaxSpeed::MegabytesPerSecond5000 => 5_000_000.0,
-        PcieLinkMaxSpeed::MegabytesPerSecond8000 => 8_000_000.0,
-        PcieLinkMaxSpeed::MegabytesPerSecond16000 => 16_000_000.0,
-        PcieLinkMaxSpeed::MegabytesPerSecond32000 => 32_000_000.0,
+        PcieLinkMaxSpeed::MegabytesPerSecond2500 => 2_500_000.0 * 1_000.0,
+        PcieLinkMaxSpeed::MegabytesPerSecond5000 => 5_000_000.0 * 1_000.0,
+        PcieLinkMaxSpeed::MegabytesPerSecond8000 => 8_000_000.0 * 1_000.0,
+        PcieLinkMaxSpeed::MegabytesPerSecond16000 => 16_000_000.0 * 1_000.0,
+        PcieLinkMaxSpeed::MegabytesPerSecond32000 => 32_000_000.0 * 1_000.0,
         _ => 0.0,
     }
 }

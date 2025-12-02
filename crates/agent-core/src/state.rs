@@ -1,4 +1,5 @@
 // ESNODE | Source Available BUSL-1.1 | Copyright (c) 2024 Estimatedstocks AB
+use std::collections::VecDeque;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, RwLock,
@@ -14,7 +15,7 @@ pub struct StatusState {
     cpu_temperatures: Arc<RwLock<Vec<TemperatureReading>>>,
     gpu_status: Arc<RwLock<Vec<GpuStatus>>>,
     load_avg_1m: Arc<AtomicU64>,
-    last_errors: Arc<RwLock<Vec<CollectorError>>>,
+    last_errors: Arc<RwLock<VecDeque<CollectorError>>>,
     last_scrape_unix_ms: Arc<AtomicU64>,
     host: Arc<RwLock<HostMetrics>>,
 }
@@ -126,7 +127,7 @@ impl StatusState {
             cpu_temperatures: Arc::new(RwLock::new(Vec::new())),
             gpu_status: Arc::new(RwLock::new(Vec::new())),
             load_avg_1m: Arc::new(AtomicU64::new(0)),
-            last_errors: Arc::new(RwLock::new(Vec::new())),
+            last_errors: Arc::new(RwLock::new(VecDeque::new())),
             last_scrape_unix_ms: Arc::new(AtomicU64::new(0)),
             host: Arc::new(RwLock::new(HostMetrics::default())),
         }
@@ -144,7 +145,7 @@ impl StatusState {
             last_errors: self
                 .last_errors
                 .read()
-                .map(|g| g.clone())
+                .map(|g| g.iter().cloned().collect())
                 .unwrap_or_default(),
             node_power_watts: {
                 let v = self.node_power_microwatts.load(Ordering::Relaxed);
@@ -201,14 +202,13 @@ impl StatusState {
 
     pub fn record_error(&self, collector: &str, message: String, unix_ms: u64) {
         if let Ok(mut guard) = self.last_errors.write() {
-            guard.push(CollectorError {
+            guard.push_back(CollectorError {
                 collector: collector.to_string(),
                 message,
                 unix_ms,
             });
-            // Keep only recent 10
             if guard.len() > 10 {
-                guard.remove(0);
+                let _ = guard.pop_front();
             }
         }
     }

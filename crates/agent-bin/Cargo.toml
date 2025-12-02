@@ -23,3 +23,15 @@ toml = "0.8"
 tokio = { version = "1.35", features = ["macros", "rt-multi-thread", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+
+[package.metadata.deb]
+name = "esnode-core"
+maintainer = "Estimatedstocks AB <support@estimatedstocks.com>"
+priority = "optional"
+section = "utils"
+revision = "1"
+depends = ["libssl3 | libssl", "adduser"]
+assets = [
+    ["target/release/esnode-core", "/usr/local/bin/esnode-core", "755"],
+    ["../../deploy/systemd/esnode-core.service", "/etc/systemd/system/esnode-core.service", "644"],
+]

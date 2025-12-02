@@ -24,6 +24,8 @@ spec:
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
           ports:
             - name: metrics
               containerPort: 9100

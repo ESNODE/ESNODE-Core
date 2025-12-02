@@ -205,9 +205,13 @@ impl Agent {
         let status_state = status.clone();
         let tsdb_for_collection = local_tsdb.clone();
         let tsdb_for_shutdown = local_tsdb.clone();
+        let tsdb_pruner_handle = local_tsdb
+            .clone()
+            .map(|tsdb| tsdb.spawn_pruner(std::time::Duration::from_secs(60)));
 
         let collection_task = tokio::spawn(async move {
             let mut ticker = tokio::time::interval(scrape_interval);
+            let mut last_tsdb_write_ms: i64 = 0;
             loop {
                 ticker.tick().await;
                 let ts_ms = chrono::Utc::now().timestamp_millis();
@@ -232,9 +236,12 @@ impl Agent {
                 drop(guard);
 
                 if let Some(tsdb) = tsdb_for_collection.clone() {
-                    let samples = samples_from_registry(&metrics_clone, ts_ms);
-                    if let Err(err) = tsdb.write_samples(&samples).await {
-                        warn!("local TSDB write failed: {:?}", err);
+                    if ts_ms - last_tsdb_write_ms >= 30_000 {
+                        let samples = samples_from_registry(&metrics_clone, ts_ms);
+                        if let Err(err) = tsdb.write_samples(&samples).await {
+                            warn!("local TSDB write failed: {:?}", err);
+                        }
+                        last_tsdb_write_ms = ts_ms;
                     }
                 }
             }
@@ -265,6 +272,7 @@ impl Agent {
                 if let Some(tsdb) = tsdb_for_shutdown {
                     let _ = tsdb.flush_current().await;
                 }
+                if let Some(handle) = tsdb_pruner_handle { handle.abort(); }
                 return Ok(());
             }
         }

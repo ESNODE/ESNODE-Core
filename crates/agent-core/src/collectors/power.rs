@@ -1,8 +1,8 @@
 // ESNODE | Source Available BUSL-1.1 | Copyright (c) 2024 Estimatedstocks AB
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use sysinfo::{ComponentExt, System, SystemExt};

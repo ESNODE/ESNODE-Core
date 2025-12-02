@@ -62,7 +62,7 @@ struct Cli {
     #[arg(long, env = "ESNODE_NODE_POWER_ENVELOPE_WATTS")]
     node_power_envelope_watts: Option<f64>,
 
-    /// Enable lightweight on-agent TSDB buffer (SQLite-backed).
+    /// Enable lightweight on-agent TSDB buffer (JSONL-backed).
     #[arg(long, env = "ESNODE_ENABLE_LOCAL_TSDB")]
     enable_local_tsdb: Option<bool>,
 
@@ -357,11 +357,7 @@ fn command_status(client: &AgentClient, no_color: bool) -> Result<()> {
             ));
         }
     }
-    if no_color {
-        print!("{out}");
-    } else {
-        print!("{out}");
-    }
+    print!("{out}");
     Ok(())
 }
 
@@ -597,7 +593,7 @@ fn command_server_status(config: &AgentConfig) -> Result<()> {
             config
                 .managed_node_id
                 .clone()
-                .unwrap_or_else(|| default_node_id())
+                .unwrap_or_else(default_node_id)
         );
         if let Some(last) = config.managed_last_contact_unix_ms {
             println!("  Last contact (unix ms): {}", last);

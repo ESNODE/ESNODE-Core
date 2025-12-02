@@ -55,10 +55,11 @@ struct AppState {
     no_color: bool,
     should_exit: bool,
     mode: AgentMode,
+    config: agent_core::AgentConfig,
 }
 
 impl AppState {
-    fn new(no_color: bool, mode: AgentMode) -> Self {
+    fn new(no_color: bool, mode: AgentMode, config: agent_core::AgentConfig) -> Self {
         AppState {
             screen: Screen::MainMenu,
             last_status: None,
@@ -66,6 +67,7 @@ impl AppState {
             no_color,
             should_exit: false,
             mode,
+            config,
         }
     }
 
@@ -91,7 +93,7 @@ pub fn run_console(
     client: &AgentClient,
     no_color: bool,
     mode: AgentMode,
-    _config: agent_core::AgentConfig,
+    config: agent_core::AgentConfig,
 ) -> Result<()> {
     let stdout = prepare_terminal()?;
     let backend = CrosstermBackend::new(stdout);
@@ -99,7 +101,7 @@ pub fn run_console(
     terminal.clear()?;
     terminal.show_cursor()?;
 
-    let mut state = AppState::new(no_color, mode);
+    let mut state = AppState::new(no_color, mode, config);
     refresh_status(&mut state, client);
     let mut last_refresh = Instant::now();
 
@@ -278,11 +280,9 @@ fn render_node_overview(frame: &mut ratatui::Frame, area: Rect, state: &AppState
         );
         return;
     }
-    let summary = NodeSummary::from_status(state.last_status.as_ref());
+    let summary = NodeSummary::from_status(state);
     let text = vec![
-        Line::from(format!(
-            "                            ESNODE – NODE OVERVIEW                        N01"
-        )),
+        Line::from("                            ESNODE – NODE OVERVIEW                        N01"),
         Line::from(format!(
             " Node: {node:<18} Region: {region:<16} Uptime: {uptime:<12}",
             node = summary.node_name,
@@ -450,7 +450,7 @@ fn render_efficiency(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         );
         return;
     }
-    let summary = NodeSummary::from_status(state.last_status.as_ref());
+    let summary = NodeSummary::from_status(state);
     let text = vec![
         Line::from("                     ESNODE – EFFICIENCY & MCP SIGNALS                   N01"),
         Line::from(""),
@@ -979,7 +979,7 @@ struct NodeSummary {
 }
 
 impl NodeSummary {
-    fn from_status(status: Option<&StatusSnapshot>) -> Self {
+    fn from_status(state: &AppState) -> Self {
         let mut summary = NodeSummary {
             node_name: "gpu-node-01".to_string(),
             region: "local".to_string(),
@@ -1012,7 +1012,7 @@ impl NodeSummary {
             tokens_per_joule: "n/a".to_string(),
         };
 
-        if let Some(status) = status {
+        if let Some(status) = state.last_status.as_ref() {
             summary.load_1 = format!("{:.1}", status.load_avg_1m);
             if let Some(l5) = status.load_avg_5m {
                 summary.load_5 = format!("{:.1}", l5);
@@ -1069,6 +1069,69 @@ impl NodeSummary {
             if let Some(power) = status.node_power_watts {
                 summary.node_power = format!("{:.1} W", power);
                 summary.tokens_per_joule = format!("{:.1}", power / 10.0);
+            } else {
+                let cpu_pkg_avg: Option<f64> = {
+                    let vals: Vec<f64> = status
+                        .cpu_package_power_watts
+                        .iter()
+                        .map(|p| p.watts)
+                        .collect();
+                    if vals.is_empty() {
+                        None
+                    } else {
+                        Some(vals.iter().sum::<f64>() / (vals.len() as f64))
+                    }
+                };
+                let gpu_avg: Option<f64> = {
+                    if status.gpus.is_empty() {
+                        None
+                    } else {
+                        Some(
+                            status
+                                .gpus
+                                .iter()
+                                .filter_map(|g| g.power_watts)
+                                .sum::<f64>()
+                                / (status.gpus.len() as f64),
+                        )
+                    }
+                };
+                let approx = match (cpu_pkg_avg, gpu_avg) {
+                    (Some(c), Some(g)) => Some(c + g),
+                    (Some(c), None) => Some(c),
+                    (None, Some(g)) => Some(g),
+                    _ => None,
+                };
+                if let Some(v) = approx {
+                    summary.node_power = format!("~{:.1} W", v);
+                }
+            }
+            if !status.cpu_temperatures.is_empty() {
+                let mut inlet = None;
+                let mut exhaust = None;
+                let mut hotspot = None;
+                for t in status.cpu_temperatures.iter() {
+                    let name = t.sensor.to_lowercase();
+                    if inlet.is_none() && (name.contains("inlet") || name.contains("ambient")) {
+                        inlet = Some(t.celsius);
+                    }
+                    if exhaust.is_none() && name.contains("exhaust") {
+                        exhaust = Some(t.celsius);
+                    }
+                    hotspot = Some(match hotspot {
+                        Some(h) if h >= t.celsius => h,
+                        _ => t.celsius,
+                    });
+                }
+                if let Some(v) = inlet {
+                    summary.therm_inlet = format!("{:.0} C", v);
+                }
+                if let Some(v) = exhaust {
+                    summary.therm_exhaust = format!("{:.0} C", v);
+                }
+                if let Some(v) = hotspot {
+                    summary.therm_hotspot = format!("{:.0} C", v);
+                }
             }
             if !status.gpus.is_empty() {
                 summary.gpu_count = status.gpus.len();
@@ -1100,6 +1163,9 @@ impl NodeSummary {
                     summary.avg_gpu_power = format!("{avg_power:.0} W/GPU");
                 }
                 summary.tokens_per_watt = "n/a".to_string();
+            }
+            if let Some(limit) = state.config.node_power_envelope_watts {
+                summary.node_limit = format!("{limit:.0} W");
             }
         }
 

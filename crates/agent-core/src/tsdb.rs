@@ -152,8 +152,7 @@ impl LocalTsdb {
         if samples.is_empty() {
             return Ok(());
         }
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        self.prune(now_ms).await?;
+        let _ = chrono::Utc::now().timestamp_millis();
 
         let mut guard = self.current.lock().await;
         for sample in samples {
@@ -240,7 +239,14 @@ impl LocalTsdb {
                 Err(_) => continue,
             };
             let dir = entry.path();
-            let size_bytes = dir_size_bytes(&dir).unwrap_or(0);
+            let size_bytes = tokio::task::spawn_blocking({
+                let dir_cloned = dir.clone();
+                move || dir_size_bytes(&dir_cloned)
+            })
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(0);
             let index = read_block_index(&dir).await.ok();
             out.push(BlockInfo {
                 dir,
@@ -301,6 +307,22 @@ impl LocalTsdb {
             }
         }
         Ok(out)
+    }
+}
+
+impl LocalTsdb {
+    pub fn spawn_pruner(
+        self: std::sync::Arc<Self>,
+        interval: Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let _ = self.prune(now_ms).await;
+            }
+        })
     }
 }
 

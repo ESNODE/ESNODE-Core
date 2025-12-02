@@ -52,9 +52,9 @@ impl Collector for CpuCollector {
         self.system.refresh_cpu();
         let la = self.system.load_average();
         let load = la.one;
-        metrics.cpu_load_avg_1m.set(load as f64);
-        metrics.cpu_load_avg_5m.set(la.five as f64);
-        metrics.cpu_load_avg_15m.set(la.fifteen as f64);
+        metrics.cpu_load_avg_1m.set(load);
+        metrics.cpu_load_avg_5m.set(la.five);
+        metrics.cpu_load_avg_15m.set(la.fifteen);
 
         let cores = self.system.cpus().len() as u64;
         let avg_util = if cores > 0 {
@@ -68,9 +68,9 @@ impl Collector for CpuCollector {
         self.status.set_cpu_summary(
             Some(cores),
             avg_util,
-            load as f64,
-            Some(la.five as f64),
-            Some(la.fifteen as f64),
+            load,
+            Some(la.five),
+            Some(la.fifteen),
             uptime_seconds,
         );
 
@@ -82,7 +82,11 @@ impl Collector for CpuCollector {
                 .set(cpu.cpu_usage() as f64);
         }
 
-        if let Some(stat) = read_proc_stat() {
+        let stat = tokio::task::spawn_blocking(read_proc_stat)
+            .await
+            .ok()
+            .flatten();
+        if let Some(stat) = stat {
             if let Some(prev) = &self.prev {
                 let inc = |state: &str, curr: u64, prev: u64| {
                     let delta = curr.saturating_sub(prev);
@@ -101,8 +105,8 @@ impl Collector for CpuCollector {
                 inc("steal", stat.steal, prev.steal);
                 let dint = stat.interrupts.saturating_sub(prev.interrupts);
                 let dctxt = stat.ctxt.saturating_sub(prev.ctxt);
-                metrics.cpu_interrupts_total.inc_by(dint as u64);
-                metrics.cpu_context_switches_total.inc_by(dctxt as u64);
+                metrics.cpu_interrupts_total.inc_by(dint);
+                metrics.cpu_context_switches_total.inc_by(dctxt);
             }
             self.prev = Some(stat);
         }
