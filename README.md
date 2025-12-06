@@ -37,11 +37,11 @@ ESNODE-Core is a GPU-aware host metrics exporter for Linux nodes. It exposes CPU
 - **ESNODE-Core (public, source-available)**  
   - License: current ESNODE BUSL-style terms.  
   - Usage: free for internal use; redistribution/trademark restrictions still apply.  
-  - Distribution: public binaries at `https://public.estimatedstocks.com/repo/<os-type>/...`.
+  - Distribution: public binaries at `https://esnode.co/downloads`.
 - **ESNODE-Pulse (licensed-only, revenue-based; separate repo)**  
   - License: proprietary.  
   - Revenue rule: ≤ USD 2M revenue → free starter license after registration; > USD 2M → paid subscription required before production use.  
-  - Distribution: **not** in this repository. Binaries are provided only after registration via `https://estimatedstocks.com/esnode-pulse/register` (or designated portal).
+  - Distribution: **not** in this repository. Binaries are provided only after registration via `https://esnode.co/products#pulse` (or designated portal).
 
 ## Components
 - `esnode-core`: per-node collector exposing Prometheus `/metrics`, JSON `/status` (`/v1/status`), and SSE `/events`.
@@ -68,20 +68,20 @@ Configuration precedence: CLI flags > env vars > `esnode.toml` > defaults. See `
 Example commands (adjust version/OS paths):
 - Ubuntu/Debian (`.deb`):
   ```bash
-  wget https://public.estimatedstocks.com/repo/linux-ubuntu/esnode-core_1.0.0_amd64.deb
-  sudo dpkg -i esnode-core_1.0.0_amd64.deb
+  wget -O esnode-core_0.1.0_amd64.deb https://esnode.co/downloads/esnode-core_0.1.0_amd64.deb
+  sudo dpkg -i esnode-core_0.1.0_amd64.deb
   sudo systemctl enable esnode-core && sudo systemctl start esnode-core
   ```
 - RHEL/CentOS (`.rpm`):
   ```bash
-  wget https://public.estimatedstocks.com/repo/linux-rhel/esnode-core-1.0.0-1.x86_64.rpm
-  sudo rpm -i esnode-core-1.0.0-1.x86_64.rpm
+  wget -O esnode-core-0.1.0-1.x86_64.rpm https://esnode.co/downloads/esnode-core-0.1.0-1.x86_64.rpm
+  sudo rpm -i esnode-core-0.1.0-1.x86_64.rpm
   sudo systemctl enable esnode-core && sudo systemctl start esnode-core
   ```
 - Generic Linux (`tar.gz`):
   ```bash
-  wget https://public.estimatedstocks.com/repo/linux-generic/esnode-core-1.0.0-linux-amd64.tar.gz
-  tar xvf esnode-core-1.0.0-linux-amd64.tar.gz
+  wget -O esnode-core-0.1.0-linux-amd64.tar.gz https://esnode.co/downloads/esnode-core-0.1.0-linux-amd64.tar.gz
+  tar xvf esnode-core-0.1.0-linux-amd64.tar.gz
   sudo mv esnode-core /usr/local/bin/
   esnode-core --version
   ```
@@ -90,7 +90,7 @@ Example commands (adjust version/OS paths):
 ## ESNODE-Pulse (Enterprise controller – licensed)
 - Not distributed publicly or within this codebase. Binaries are provided only after registration/approval.  
 - Revenue rule: ≤ USD 2M revenue → free starter license (registration required). > USD 2M → paid subscription before production use.  
-- Request access: `https://estimatedstocks.com/esnode-pulse/register` (submit company + revenue band, accept terms).  
+- Request access: `https://esnode.co/products#pulse` (submit company + revenue band, accept terms).  
 - ESNODE-Pulse binaries must not be mirrored to the public distribution paths; see the private repository for build details.
 
 ## Deployment artifacts
