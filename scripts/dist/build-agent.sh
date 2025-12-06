@@ -98,7 +98,7 @@ EOF
     --architecture "$([[ "${pkg_type}" == "deb" ]] && echo "${deb_arch}" || echo "${rpm_arch}")" \
     --description "ESNODE-Core: GPU-aware node metrics exporter" \
     --license "ESNODE BUSL-style (see LICENSE)" \
-    --url "https://estimatedstocks.com" \
+    --url "https://esnode.co" \
     --maintainer "Estimatedstocks AB" \
     --package "${output}" \
     --after-install "${tmpdir}/postinstall.sh" \
