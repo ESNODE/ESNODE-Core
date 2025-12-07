@@ -19,7 +19,14 @@ Supported OS targets (packaging/compat):
 
 ## Build commands
 
-ESNODE-Core:
+Run tests first (recommended):
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+ESNODE-Core packaging:
 ```bash
 ESNODE_VERSION=1.0.0 scripts/dist/build-agent.sh
 # or: scripts/dist/build-agent.sh 1.0.0
@@ -35,11 +42,19 @@ Outputs:
   - SLES: `public/distribution/esnode-core/linux/rpm/sles/esnode-core-<version>-1.x86_64.rpm`
 - `public/distribution/esnode-core/windows/esnode-core-<version>-windows-amd64.zip` if the Windows target is installed
 
+One-shot release (tar/deb/rpm for Linux targets, optional Windows zip):
+```bash
+scripts/dist/esnode-core-release.sh
+# Uses version from crates/agent-bin/Cargo.toml unless ESNODE_VERSION is set
+```
+Artifacts are written to the canonical layout above and mirrored into `public/distribution/releases/<label>/` for easy pickup (e.g., `host`, `linux-amd64`).
+
 ## Notes
 - The scripts assume amd64 builds; extend as needed for other targets. Override with:
   - `ESNODE_TARGET=<rust-target-triple>` (e.g., `x86_64-unknown-linux-gnu` when cross-compiling on macOS)
   - `ESNODE_ARCH=<deb/rpm arch>` (e.g., `amd64` or `arm64`)
-  - When cross-compiling on macOS, install a Linux toolchain such as Homebrew `x86_64-unknown-linux-gnu` and export `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER=x86_64-unknown-linux-gnu-gcc` (plus matching `CC_`/`AR_` vars) before running the build script.
+  - When cross-compiling on macOS, install Linux toolchains via Homebrew (`x86_64-unknown-linux-gnu` and/or `aarch64-unknown-linux-gnu`). The release script auto-wires linkers/archivers if they are present, and will skip a target if the toolchain is missing.
+- CI (`.github/workflows/tests.yml`) enforces fmt/clippy/tests on PRs/pushes and, on tags, installs `fpm`/rpm tooling to run `scripts/dist/build-agent.sh` as a packaging smoke.
 - Install helpers:
   - Linux: `scripts/install/esnode-core-linux.sh` copies binaries to `/usr/local/bin` and installs systemd units.
   - Windows: `scripts/install/esnode-core-windows.ps1` copies to `C:\Program Files\ESNODE`, adds PATH, and optionally registers an NSSM service.

@@ -194,7 +194,7 @@ async fn main() -> Result<()> {
     let cli_overrides = cli_to_overrides(&cli)?;
     config.apply_overrides(cli_overrides);
 
-    match cli.command.unwrap_or(Command::Daemon) {
+    match cli.command.as_ref().unwrap_or(&Command::Daemon) {
         Command::Daemon => {
             init_tracing(&config);
             tracing::info!("Starting ESNODE-Core with config: {:?}", config);
@@ -207,10 +207,10 @@ async fn main() -> Result<()> {
         }
         Command::Metrics { profile } => {
             let client = AgentClient::new(&config.listen_address);
-            command_metrics(&client, profile)
+            command_metrics(&client, *profile)
         }
-        Command::EnableMetricSet { set } => command_toggle_metric_set(&config_path, set, true),
-        Command::DisableMetricSet { set } => command_toggle_metric_set(&config_path, set, false),
+        Command::EnableMetricSet { set } => command_toggle_metric_set(&config_path, *set, true),
+        Command::DisableMetricSet { set } => command_toggle_metric_set(&config_path, *set, false),
         Command::Profiles => command_profiles(),
         Command::Diagnostics => {
             let client = AgentClient::new(&config.listen_address);
@@ -219,12 +219,18 @@ async fn main() -> Result<()> {
         Command::Cli => {
             let client = AgentClient::new(&config.listen_address);
             let mode = agent_mode(&config);
-            run_console(&client, cli.no_color, mode, config.clone())
+            run_console(
+                &client,
+                cli.no_color,
+                mode,
+                config_path.clone(),
+                config.clone(),
+            )
         }
         Command::Server { action } => {
             match action {
                 ServerCommand::Connect { address, _token } => {
-                    command_server_connect(&config_path, &config, address, None)?
+                    command_server_connect(&config_path, &config, address.clone(), None)?
                 }
                 ServerCommand::Disconnect => command_server_disconnect(&config_path, &config)?,
                 ServerCommand::Status => command_server_status(&config)?,
@@ -233,7 +239,7 @@ async fn main() -> Result<()> {
         }
         Command::Config { action } => match action {
             ConfigCommand::Show => command_config_show(&config_path, &config),
-            ConfigCommand::Set { key_value } => command_config_set(&config_path, key_value),
+            ConfigCommand::Set { key_value } => command_config_set(&config_path, key_value.clone()),
         },
     }
 }
@@ -520,6 +526,47 @@ fn ensure_local_control(config: &AgentConfig) -> Result<()> {
         bail!("This node is managed by ESNODE-Pulse ({server}); local control is disabled");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cli_to_overrides, Cli, Command, MetricsProfile, MetricSet};
+    use clap::Parser;
+
+    #[test]
+    fn cli_parses_status_command() {
+        let cli = Cli::parse_from(["esnode-core", "status"]);
+        assert!(matches!(cli.command, Some(Command::Status)));
+    }
+
+    #[test]
+    fn cli_parses_metrics_command_with_profile() {
+        let cli = Cli::parse_from(["esnode-core", "metrics", "full"]);
+        match cli.command {
+            Some(Command::Metrics { profile }) => assert!(matches!(profile, MetricsProfile::Full)),
+            other => panic!("unexpected {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cli_overrides_enable_flags() {
+        let cli = Cli::parse_from([
+            "esnode-core",
+            "--enable-cpu",
+            "false",
+            "--enable-network",
+            "false",
+            "enable-metric-set",
+            "gpu",
+        ]);
+        let overrides = cli_to_overrides(&cli).unwrap();
+        assert_eq!(overrides.enable_cpu, Some(false));
+        assert_eq!(overrides.enable_network, Some(false));
+        match cli.command {
+            Some(Command::EnableMetricSet { set }) => assert!(matches!(set, MetricSet::Gpu)),
+            _ => panic!("expected enable-metric-set"),
+        }
+    }
 }
 
 fn agent_mode(config: &AgentConfig) -> AgentMode {

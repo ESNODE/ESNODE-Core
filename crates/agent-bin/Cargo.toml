@@ -24,6 +24,11 @@ tokio = { version = "1.35", features = ["macros", "rt-multi-thread", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+tempfile = "3"
+
 [package.metadata.deb]
 name = "esnode-core"
 maintainer = "Estimatedstocks AB <support@estimatedstocks.com>"

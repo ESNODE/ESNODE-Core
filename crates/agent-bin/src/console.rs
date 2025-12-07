@@ -1,9 +1,14 @@
 // ESNODE | Source Available BUSL-1.1 | Copyright (c) 2024 Estimatedstocks AB
-use std::io::{stdout, Stdout};
-use std::time::{Duration, Instant};
+use std::{
+    fs,
+    io::{stdout, Stdout},
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 
 use agent_core::state::{GpuStatus, StatusSnapshot};
 use anyhow::{Context, Result};
+use chrono::Utc;
 use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEventKind},
@@ -48,6 +53,12 @@ pub enum AgentMode {
     Managed(ManagedMetadata),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConnectField {
+    Server,
+    Token,
+}
+
 struct AppState {
     screen: Screen,
     last_status: Option<StatusSnapshot>,
@@ -55,11 +66,20 @@ struct AppState {
     no_color: bool,
     should_exit: bool,
     mode: AgentMode,
+    config_path: PathBuf,
     config: agent_core::AgentConfig,
+    connect_active: ConnectField,
+    connect_server_input: String,
+    connect_token_input: String,
 }
 
 impl AppState {
-    fn new(no_color: bool, mode: AgentMode, config: agent_core::AgentConfig) -> Self {
+    fn new(
+        no_color: bool,
+        mode: AgentMode,
+        config_path: PathBuf,
+        config: agent_core::AgentConfig,
+    ) -> Self {
         AppState {
             screen: Screen::MainMenu,
             last_status: None,
@@ -67,7 +87,11 @@ impl AppState {
             no_color,
             should_exit: false,
             mode,
-            config,
+            config_path,
+            config: config.clone(),
+            connect_active: ConnectField::Server,
+            connect_server_input: config.managed_server.clone().unwrap_or_default(),
+            connect_token_input: config.managed_join_token.clone().unwrap_or_default(),
         }
     }
 
@@ -93,6 +117,7 @@ pub fn run_console(
     client: &AgentClient,
     no_color: bool,
     mode: AgentMode,
+    config_path: PathBuf,
     config: agent_core::AgentConfig,
 ) -> Result<()> {
     let stdout = prepare_terminal()?;
@@ -101,7 +126,7 @@ pub fn run_console(
     terminal.clear()?;
     terminal.show_cursor()?;
 
-    let mut state = AppState::new(no_color, mode, config);
+    let mut state = AppState::new(no_color, mode, config_path, config);
     refresh_status(&mut state, client);
     let mut last_refresh = Instant::now();
 
@@ -115,32 +140,41 @@ pub fn run_console(
         let timeout = Duration::from_millis(200);
         if event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    let refresh_now = handle_key(key.code, &mut state);
+                // Some terminals/tmux combos report keys as Repeat or Unknown (and occasionally
+                // only emit Release); treat everything except explicit Release as a press.
+                if !matches!(key.kind, KeyEventKind::Release) {
+                    let mut refresh_now = handle_key(key.code, &mut state);
                     if state.should_exit {
                         break;
                     }
                     match key.code {
                         KeyCode::Char('1') if state.screen == Screen::MainMenu => {
-                            state.set_screen(Screen::NodeOverview)
+                            state.set_screen(Screen::NodeOverview);
+                            refresh_now = true;
                         }
                         KeyCode::Char('2') if state.screen == Screen::MainMenu => {
-                            state.set_screen(Screen::GpuPower)
+                            state.set_screen(Screen::GpuPower);
+                            refresh_now = true;
                         }
                         KeyCode::Char('3') if state.screen == Screen::MainMenu => {
-                            state.set_screen(Screen::NetworkDisk)
+                            state.set_screen(Screen::NetworkDisk);
+                            refresh_now = true;
                         }
                         KeyCode::Char('4') if state.screen == Screen::MainMenu => {
-                            state.set_screen(Screen::Efficiency)
+                            state.set_screen(Screen::Efficiency);
+                            refresh_now = true;
                         }
                         KeyCode::Char('5') if state.screen == Screen::MainMenu => {
-                            state.set_screen(Screen::MetricsProfiles)
+                            state.set_screen(Screen::MetricsProfiles);
+                            refresh_now = true;
                         }
                         KeyCode::Char('6') if state.screen == Screen::MainMenu => {
-                            state.set_screen(Screen::AgentStatus)
+                            state.set_screen(Screen::AgentStatus);
+                            refresh_now = true;
                         }
                         KeyCode::Char('7') if state.screen == Screen::MainMenu => {
-                            state.set_screen(Screen::ConnectServer)
+                            state.set_screen(Screen::ConnectServer);
+                            refresh_now = true;
                         }
                         _ => {}
                     }
@@ -411,20 +445,42 @@ fn render_network_disk(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
         );
         return;
     }
+    let status = state.last_status.as_ref().unwrap();
+    let nic = status
+        .primary_nic
+        .clone()
+        .unwrap_or_else(|| "n/a".to_string());
+    let rx = status
+        .net_rx_bytes_per_sec
+        .map(|b| format!("{}/s", human_bytes(b as u64)))
+        .unwrap_or_else(|| "n/a".to_string());
+    let tx = status
+        .net_tx_bytes_per_sec
+        .map(|b| format!("{}/s", human_bytes(b as u64)))
+        .unwrap_or_else(|| "n/a".to_string());
+    let drops = status
+        .net_drops_per_sec
+        .map(|d| format!("{d:.1}/s"))
+        .unwrap_or_else(|| "0".to_string());
+    let disk_used = match (status.disk_root_used_bytes, status.disk_root_total_bytes) {
+        (Some(used), Some(total)) => format!("{} / {}", human_bytes(used), human_bytes(total)),
+        _ => "n/a".to_string(),
+    };
+    let disk_io = status
+        .disk_root_io_time_ms
+        .map(|v| format!("{v} ms"))
+        .unwrap_or_else(|| "n/a".to_string());
+
     let text = vec![
         Line::from("                        ESNODE – NETWORK & DISK STATUS                   N01"),
         Line::from(""),
-        Line::from(" Network Interfaces:"),
-        Line::from("   IF   State   Rx MB/s  Tx MB/s  Rx Err  Tx Err  Drops"),
-        Line::from("   ---  ------  -------- -------- ------- ------- -----"),
-        Line::from("   eth0 UP      n/a      n/a      0       0       0"),
-        Line::from("   eth1 DOWN    0.0      0.0      0       0       0"),
+        Line::from(" Network:"),
+        Line::from("   IF     Rx/s             Tx/s             Drops/s"),
+        Line::from(format!("   {nic:<6}{rx:<17}{tx:<17}{drops}")),
         Line::from(""),
         Line::from(" Disks:"),
-        Line::from("   Mount   FS Type  Used / Total        Read MB/s  Write MB/s  Latency ms"),
-        Line::from("   ------  -------  ----------------    ---------- ----------- ----------"),
-        Line::from("   /       ext4     n/a                n/a        n/a        n/a"),
-        Line::from("   /data   xfs      n/a                n/a        n/a        n/a"),
+        Line::from("   Mount   Used / Total                 IO Time"),
+        Line::from(format!("   /       {disk_used:<26}{disk_io}")),
         Line::from(""),
         Line::from(""),
         Line::from(" F3=Exit   F5=Refresh   F9=I/O Detail   F12=Back"),
@@ -454,27 +510,40 @@ fn render_efficiency(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
     let text = vec![
         Line::from("                     ESNODE – EFFICIENCY & MCP SIGNALS                   N01"),
         Line::from(""),
-        Line::from("   Efficiency (Last 5 minutes):"),
+        Line::from("   Efficiency Snapshot:"),
         Line::from(format!(
             "     Tokens per Joule . . . . . . . . . . . . . . . . :  {}",
             summary.tokens_per_joule
         )),
-        Line::from("     Tokens per Watt-second  . . . . . . . . . . . . :  n/a"),
-        Line::from("     Inference cost per 1M tokens (USD est.) . . . . :  n/a"),
-        Line::from("     Utilization score (0–100)  . . . . . . . . . . :  83"),
+        Line::from(format!(
+            "     Tokens per Watt-second  . . . . . . . . . . . . :  {}",
+            summary.tokens_per_watt
+        )),
+        Line::from(format!(
+            "     Node power draw . . . . . . . . . . . . . . . . :  {}",
+            summary.node_power
+        )),
+        Line::from(format!(
+            "     Avg GPU util / power . . . . . . . . . . . . . .:  {} / {}",
+            summary.avg_gpu_util, summary.avg_gpu_power
+        )),
+        Line::from(format!(
+            "     CPU util (approx)  . . . . . . . . . . . . . . .:  {}",
+            summary.cpu_util
+        )),
         Line::from(""),
         Line::from("   Routing / Scheduling Scores:"),
-        Line::from("     Best-fit GPU score  . . . . . . . . . . . . . . :  0.91"),
-        Line::from("     Energy cost score . . . . . . . . . . . . . . . :  0.23"),
-        Line::from("     Thermal risk score  . . . . . . . . . . . . . . :  0.12"),
-        Line::from("     Memory pressure score . . . . . . . . . . . . . :  0.37"),
-        Line::from("     Cache freshness score . . . . . . . . . . . . . :  0.88"),
+        Line::from("     Best-fit GPU score  . . . . . . . . . . . . . . :  n/a"),
+        Line::from("     Energy cost score . . . . . . . . . . . . . . . :  n/a"),
+        Line::from("     Thermal risk score  . . . . . . . . . . . . . . :  n/a"),
+        Line::from("     Memory pressure score . . . . . . . . . . . . . :  n/a"),
+        Line::from("     Cache freshness score . . . . . . . . . . . . . :  n/a"),
         Line::from(""),
         Line::from("   Batch & Queue:"),
-        Line::from("     Batch capacity free (%)  . . . . . . . . . . . . :  28.5"),
-        Line::from("     KV cache free bytes  . . . . . . . . . . . . . . :  54.3 GiB"),
-        Line::from("     Inference queue length  . . . . . . . . . . . . :  12"),
-        Line::from("     Speculative ready flag . . . . . . . . . . . . . :  YES"),
+        Line::from("     Batch capacity free (%)  . . . . . . . . . . . . :  n/a"),
+        Line::from("     KV cache free bytes  . . . . . . . . . . . . . . :  n/a"),
+        Line::from("     Inference queue length  . . . . . . . . . . . . :  n/a"),
+        Line::from("     Speculative ready flag . . . . . . . . . . . . . :  n/a"),
         Line::from(""),
         Line::from(""),
         Line::from(" F3=Exit   F5=Refresh   F9=Explain Scores   F12=Back"),
@@ -491,16 +560,7 @@ fn render_efficiency(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
 }
 
 fn render_metric_profiles(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
-    if state.last_status.is_none() {
-        render_placeholder(
-            frame,
-            area,
-            state,
-            "Waiting for metrics profile state from esnode-core daemon...",
-        );
-        return;
-    }
-    let summary = MetricToggleState::from_status(state.last_status.as_ref());
+    let summary = MetricToggleState::from_config(&state.config, state.last_status.as_ref());
     let text = vec![
         Line::from("                         ESNODE – METRICS PROFILES                      N01"),
         Line::from(""),
@@ -641,14 +701,18 @@ fn render_agent_status(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
 }
 
 fn render_connect_server(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    let server_prefix = "   Server address (host:port)  . . . . . . . . . . . . .  ";
+    let token_prefix = "   Join token (optional)  . . . . . . . . . . . . . . . .  ";
+    let server_line = format!("{server_prefix}{:<30}", state.connect_server_input);
+    let token_line = format!("{token_prefix}{:<30}", state.connect_token_input);
     let lines = vec![
         Line::from("                    ESNODE – CONNECT TO ESNODE-SERVER                    N02"),
         Line::from(""),
         Line::from("   This node is currently running in STANDALONE mode."),
         Line::from("   To enroll it into a managed cluster, enter the ESNODE-Pulse details."),
         Line::from(""),
-        Line::from("   Server address (host:port)  . . . . . . . . . . . . .  __________________"),
-        Line::from("   Join token (optional)  . . . . . . . . . . . . . . . .  __________________"),
+        Line::from(server_line.clone()),
+        Line::from(token_line.clone()),
         Line::from(""),
         Line::from("   After connection:"),
         Line::from("     - Local tuning via this console will be disabled."),
@@ -675,18 +739,38 @@ fn render_connect_server(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
         .block(block)
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+
+    // Place cursor on active input
+    let (cursor_row, cursor_col) = match state.connect_active {
+        ConnectField::Server => (
+            area.y + 5,
+            area.x + server_prefix.len() as u16 + state.connect_server_input.len() as u16,
+        ),
+        ConnectField::Token => (
+            area.y + 6,
+            area.x + token_prefix.len() as u16 + state.connect_token_input.len() as u16,
+        ),
+    };
+    frame.set_cursor(cursor_col, cursor_row);
 }
 
 fn handle_key(code: KeyCode, state: &mut AppState) -> bool {
     if let AgentMode::Managed(_) = state.mode {
-        match code {
-            KeyCode::Esc | KeyCode::F(3) | KeyCode::F(12) | KeyCode::Char('q') => {
-                state.should_exit = true
+        if state.screen != Screen::ConnectServer {
+            match code {
+                KeyCode::Esc | KeyCode::F(3) | KeyCode::F(12) | KeyCode::Char('q') => {
+                    state.should_exit = true
+                }
+                KeyCode::F(5) => return true,
+                _ => {}
             }
-            KeyCode::F(5) => return true,
-            _ => {}
+            return false;
         }
-        return false;
+    }
+    if state.screen == Screen::ConnectServer {
+        if let Some(refresh) = handle_connect_key(code, state) {
+            return refresh;
+        }
     }
     match code {
         KeyCode::Esc | KeyCode::F(12) => state.back(),
@@ -700,6 +784,12 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> bool {
             state.message =
                 Some("Use number keys 1-7, F3=Exit, F5/F9=Refresh, F12=Menu".to_string());
         }
+        KeyCode::Char(k @ '1'..='3') if state.screen == Screen::AgentStatus => {
+            handle_agent_status_action(k, state);
+        }
+        KeyCode::Char(k @ '1'..='6') if state.screen == Screen::MetricsProfiles => {
+            toggle_metric_profile(k, state);
+        }
         KeyCode::Left => {
             state.screen = Screen::MainMenu;
         }
@@ -709,6 +799,209 @@ fn handle_key(code: KeyCode, state: &mut AppState) -> bool {
         _ => {}
     }
     false
+}
+
+fn handle_agent_status_action(key: char, state: &mut AppState) {
+    match key {
+        '1' => {
+            state.message = Some(
+                "View full log via: journalctl -u esnode-core -n 100 (or your log file)"
+                    .to_string(),
+            );
+        }
+        '2' => {
+            state.message = Some(
+                "Export diagnostics via CLI: esnode-core diagnostics > diagnostics.txt".to_string(),
+            );
+        }
+        '3' => {
+            state.message = Some(format!(
+                "Config path: {}; use CLI 'esnode-core config show'",
+                state.config_path.to_string_lossy()
+            ));
+        }
+        _ => {}
+    }
+}
+
+fn toggle_metric_profile(key: char, state: &mut AppState) {
+    // Flip config booleans and persist to the same config file used by the CLI.
+    let mut message = String::new();
+    let mut changed = false;
+    match key {
+        // Host / node bundle
+        '1' => {
+            let enable = !(state.config.enable_cpu
+                && state.config.enable_memory
+                && state.config.enable_disk
+                && state.config.enable_network);
+            state.config.enable_cpu = enable;
+            state.config.enable_memory = enable;
+            state.config.enable_disk = enable;
+            state.config.enable_network = enable;
+            message = format!(
+                "{} host/node metrics (CPU/mem/disk/net)",
+                if enable { "Enabled" } else { "Disabled" }
+            );
+            changed = true;
+        }
+        // GPU core
+        '2' => {
+            state.config.enable_gpu = !state.config.enable_gpu;
+            message = format!(
+                "{} GPU core metrics",
+                if state.config.enable_gpu {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+            );
+            changed = true;
+        }
+        // GPU power/energy
+        '3' => {
+            state.config.enable_power = !state.config.enable_power;
+            message = format!(
+                "{} GPU power metrics",
+                if state.config.enable_power {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+            );
+            changed = true;
+        }
+        // MCP signals
+        '4' => {
+            state.config.enable_mcp = !state.config.enable_mcp;
+            message = format!(
+                "{} MCP metrics",
+                if state.config.enable_mcp {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+            );
+            changed = true;
+        }
+        // Application metrics
+        '5' => {
+            state.config.enable_app = !state.config.enable_app;
+            message = format!(
+                "{} application metrics",
+                if state.config.enable_app {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+            );
+            changed = true;
+        }
+        // Rack / room thermals
+        '6' => {
+            state.config.enable_rack_thermals = !state.config.enable_rack_thermals;
+            message = format!(
+                "{} rack/room thermals",
+                if state.config.enable_rack_thermals {
+                    "Enabled"
+                } else {
+                    "Disabled"
+                }
+            );
+            changed = true;
+        }
+        _ => {}
+    }
+
+    if !changed {
+        return;
+    }
+
+    if let Err(err) = persist_console_config(&state.config_path, &state.config) {
+        state.message = Some(format!("Failed to save metrics profile: {err}"));
+    } else {
+        state.message = Some(message);
+    }
+}
+
+fn persist_console_config(path: &PathBuf, config: &agent_core::AgentConfig) -> Result<()> {
+    let contents = toml::to_string_pretty(config)?;
+    fs::write(path, contents).context("writing config file")?;
+    Ok(())
+}
+
+fn handle_connect_key(code: KeyCode, state: &mut AppState) -> Option<bool> {
+    match code {
+        KeyCode::Enter => {
+            if state.connect_server_input.trim().is_empty() {
+                state.message =
+                    Some("Enter server address (host:port) before connecting".to_string());
+            } else {
+                perform_connect(state);
+            }
+            return Some(false);
+        }
+        KeyCode::Tab => {
+            state.connect_active = match state.connect_active {
+                ConnectField::Server => ConnectField::Token,
+                ConnectField::Token => ConnectField::Server,
+            };
+            return Some(false);
+        }
+        KeyCode::Backspace => {
+            match state.connect_active {
+                ConnectField::Server => {
+                    state.connect_server_input.pop();
+                }
+                ConnectField::Token => {
+                    state.connect_token_input.pop();
+                }
+            }
+            return Some(false);
+        }
+        KeyCode::Char(c) => {
+            // Basic printable guard; allow spaces as part of token.
+            if !c.is_control() {
+                match state.connect_active {
+                    ConnectField::Server => state.connect_server_input.push(c),
+                    ConnectField::Token => state.connect_token_input.push(c),
+                }
+            }
+            return Some(false);
+        }
+        _ => {}
+    }
+    None
+}
+
+fn perform_connect(state: &mut AppState) {
+    let server = state.connect_server_input.trim().to_string();
+    let token = state.connect_token_input.trim().to_string();
+
+    state.config.managed_server = Some(server.clone());
+    state.config.managed_join_token = if token.is_empty() {
+        None
+    } else {
+        Some(token.clone())
+    };
+    if state.config.managed_node_id.is_none() {
+        state.config.managed_node_id = Some("local-node".to_string());
+    }
+    if state.config.managed_cluster_id.is_none() {
+        state.config.managed_cluster_id = Some("unknown-cluster".to_string());
+    }
+    state.config.managed_last_contact_unix_ms = Some(Utc::now().timestamp_millis() as u64);
+
+    if let Err(err) = persist_console_config(&state.config_path, &state.config) {
+        state.message = Some(format!("Failed to save connection: {err}"));
+        return;
+    }
+
+    state.message = Some(format!(
+        "Saved ESNODE-Pulse server {}, token {}",
+        server,
+        if token.is_empty() { "(none)" } else { "(set)" }
+    ));
 }
 
 fn primary_style(state: &AppState) -> Style {
@@ -758,6 +1051,100 @@ fn render_placeholder(frame: &mut ratatui::Frame, area: Rect, state: &AppState, 
         .block(block)
         .wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use agent_core::state::{GpuStatus, StatusSnapshot};
+
+    use super::{AgentMode, AppState, MetricToggleState, NodeSummary};
+
+    fn sample_status() -> StatusSnapshot {
+        StatusSnapshot {
+            healthy: true,
+            load_avg_1m: 1.5,
+            load_avg_5m: Some(1.0),
+            load_avg_15m: Some(0.5),
+            uptime_seconds: Some(3600),
+            last_scrape_unix_ms: 123,
+            last_errors: vec![],
+            node_power_watts: Some(220.0),
+            cpu_package_power_watts: vec![],
+            cpu_temperatures: vec![],
+            gpus: vec![GpuStatus {
+                gpu: "0".to_string(),
+                temperature_celsius: Some(70.0),
+                power_watts: Some(250.0),
+                util_percent: Some(75.0),
+                memory_total_bytes: Some(24.0 * 1024.0 * 1024.0 * 1024.0),
+                memory_used_bytes: Some(12.0 * 1024.0 * 1024.0 * 1024.0),
+                fan_percent: Some(30.0),
+                clock_sm_mhz: None,
+                clock_mem_mhz: None,
+                thermal_throttle: false,
+                power_throttle: false,
+            }],
+            cpu_cores: Some(16),
+            cpu_util_percent: Some(55.0),
+            mem_total_bytes: Some(32 * 1024 * 1024 * 1024),
+            mem_used_bytes: Some(16 * 1024 * 1024 * 1024),
+            mem_free_bytes: Some(10 * 1024 * 1024 * 1024),
+            swap_used_bytes: Some(0),
+            disk_root_total_bytes: Some(500 * 1024 * 1024 * 1024),
+            disk_root_used_bytes: Some(200 * 1024 * 1024 * 1024),
+            disk_root_io_time_ms: Some(12),
+            primary_nic: Some("eth0".to_string()),
+            net_rx_bytes_per_sec: Some(10_000.0),
+            net_tx_bytes_per_sec: Some(5_000.0),
+            net_drops_per_sec: Some(0.1),
+        }
+    }
+
+    #[test]
+    fn node_summary_formats_core_fields() {
+        let mut dummy_state = AppState::new(
+            false,
+            AgentMode::Standalone,
+            std::path::PathBuf::from("/tmp/esnode.toml"),
+            agent_core::AgentConfig::default(),
+        );
+        dummy_state.set_status(Some(sample_status()));
+
+        let summary = NodeSummary::from_status(&dummy_state);
+
+        assert_eq!(summary.cores, "16");
+        assert_eq!(summary.cpu_util, "55 %");
+        assert!(summary.mem_total.contains("GiB"));
+        assert!(summary.disk_used.contains("/"));
+        assert!(summary.net_rx.contains("eth0"));
+        assert_eq!(summary.avg_gpu_util, "75 %");
+        assert_eq!(summary.node_power, "220.0 W");
+    }
+
+    #[test]
+    fn metric_toggle_state_prefers_config() {
+        let mut cfg = agent_core::AgentConfig::default();
+        cfg.enable_cpu = false;
+        cfg.enable_memory = false;
+        cfg.enable_disk = false;
+        cfg.enable_network = false;
+        cfg.enable_gpu = true;
+        cfg.enable_power = false;
+        cfg.enable_mcp = true;
+        cfg.enable_app = false;
+        cfg.enable_rack_thermals = true;
+
+        let toggles = MetricToggleState::from_config(&cfg, None);
+        assert_eq!(toggles.host, 'N');
+        assert_eq!(toggles.gpu_core, 'Y');
+        assert_eq!(toggles.gpu_power, 'N');
+        assert_eq!(toggles.mcp, 'Y');
+        assert_eq!(toggles.app, 'N');
+        assert_eq!(toggles.rack, 'Y');
+
+        let toggles2 = MetricToggleState::from_config(&cfg, Some(&sample_status()));
+        assert_eq!(toggles2.host, 'Y');
+    }
 }
 
 fn render_managed(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
@@ -1068,7 +1455,6 @@ impl NodeSummary {
             }
             if let Some(power) = status.node_power_watts {
                 summary.node_power = format!("{:.1} W", power);
-                summary.tokens_per_joule = format!("{:.1}", power / 10.0);
             } else {
                 let cpu_pkg_avg: Option<f64> = {
                     let vals: Vec<f64> = status
@@ -1167,6 +1553,9 @@ impl NodeSummary {
             if let Some(limit) = state.config.node_power_envelope_watts {
                 summary.node_limit = format!("{limit:.0} W");
             }
+            // We don't yet have real AI efficiency counters in the status payload; keep
+            // tokens-per-* as n/a to avoid showing fictional numbers. When metrics are
+            // added to StatusSnapshot, wire them here.
         }
 
         summary
@@ -1184,19 +1573,46 @@ struct MetricToggleState {
 }
 
 impl MetricToggleState {
-    fn from_status(status: Option<&StatusSnapshot>) -> Self {
+    fn from_config(config: &agent_core::AgentConfig, status: Option<&StatusSnapshot>) -> Self {
         let mut toggles = MetricToggleState {
-            host: 'Y',
-            gpu_core: 'Y',
-            gpu_power: 'Y',
-            mcp: 'N',
-            app: 'N',
-            rack: 'N',
+            host: if config.enable_cpu
+                && config.enable_memory
+                && config.enable_disk
+                && config.enable_network
+            {
+                'Y'
+            } else {
+                'N'
+            },
+            gpu_core: if config.enable_gpu { 'Y' } else { 'N' },
+            gpu_power: if config.enable_power { 'Y' } else { 'N' },
+            mcp: if config.enable_mcp { 'Y' } else { 'N' },
+            app: if config.enable_app { 'Y' } else { 'N' },
+            rack: if config.enable_rack_thermals {
+                'Y'
+            } else {
+                'N'
+            },
         };
-        if status.is_none() {
-            toggles.host = 'N';
-            toggles.gpu_core = 'N';
-            toggles.gpu_power = 'N';
+
+        // If config and status disagree (e.g., metrics temporarily unavailable), prefer
+        // the config but upgrade to 'Y' when recent data indicates it's actually on.
+        if let Some(s) = status {
+            if toggles.host == 'N'
+                && (s.cpu_cores.is_some()
+                    || s.mem_total_bytes.is_some()
+                    || s.disk_root_total_bytes.is_some())
+            {
+                toggles.host = 'Y';
+            }
+            if toggles.gpu_core == 'N' && !s.gpus.is_empty() {
+                toggles.gpu_core = 'Y';
+            }
+            if toggles.gpu_power == 'N'
+                && (s.node_power_watts.is_some() || !s.cpu_package_power_watts.is_empty())
+            {
+                toggles.gpu_power = 'Y';
+            }
         }
         toggles
     }
