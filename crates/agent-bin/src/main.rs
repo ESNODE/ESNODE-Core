@@ -54,6 +54,10 @@ struct Cli {
     #[arg(long, env = "ESNODE_ENABLE_GPU")]
     enable_gpu: Option<bool>,
 
+    /// Enable or disable AMD GPU collector (ROCm)
+    #[arg(long, env = "ESNODE_ENABLE_GPU_AMD")]
+    enable_gpu_amd: Option<bool>,
+
     /// Enable or disable MIG telemetry (requires GPU feature; guarded).
     #[arg(long, env = "ESNODE_ENABLE_GPU_MIG")]
     enable_gpu_mig: Option<bool>,
@@ -287,6 +291,7 @@ fn cli_to_overrides(cli: &Cli) -> Result<ConfigOverrides> {
         enable_disk: cli.enable_disk,
         enable_network: cli.enable_network,
         enable_gpu: cli.enable_gpu,
+        enable_gpu_amd: cli.enable_gpu_amd,
         enable_gpu_mig: cli.enable_gpu_mig,
         enable_gpu_events: cli.enable_gpu_events,
         gpu_visible_devices: cli.gpu_visible_devices.clone().map(Some),

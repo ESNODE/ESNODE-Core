@@ -28,7 +28,10 @@ use crate::collectors::Collector;
 #[cfg(all(feature = "gpu", target_os = "linux"))]
 use crate::event_worker::{spawn_event_worker, EventRecord};
 use crate::metrics::MetricsRegistry;
-use crate::state::{GpuHealth, GpuIdentity, GpuStatus, GpuTopo, StatusState};
+use crate::state::{
+    FabricLink, FabricLinkType, GpuCapabilities, GpuHealth, GpuIdentity, GpuStatus, GpuTopo,
+    GpuVendor, StatusState,
+};
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
 use crate::state::{ComputeInstanceNode, GpuInstanceNode, MigTree};
 #[cfg(feature = "gpu")]
@@ -60,6 +63,9 @@ pub struct GpuCollector {
     enable_mig: bool,
     #[cfg(feature = "gpu")]
     enable_events: bool,
+    #[cfg(feature = "gpu")]
+    #[allow(dead_code)]
+    enable_amd: bool,
     #[cfg(feature = "gpu")]
     visible_filter: Option<HashSet<String>>,
     #[cfg(feature = "gpu")]
@@ -125,6 +131,7 @@ impl GpuCollector {
                             } else {
                                 "esnode.co"
                             },
+                            enable_amd: config.enable_gpu_amd,
                             #[cfg(all(feature = "gpu", target_os = "linux"))]
                             event_rx,
                             status,
@@ -162,6 +169,7 @@ impl GpuCollector {
                             } else {
                                 "esnode.co"
                             },
+                            enable_amd: config.enable_gpu_amd,
                             #[cfg(all(feature = "gpu", target_os = "linux"))]
                             event_rx: None,
                             status,
@@ -330,6 +338,12 @@ impl Collector for GpuCollector {
                 let mut status = GpuStatus {
                     uuid: Some(uuid_string.clone()),
                     gpu: gpu_label.clone(),
+                    vendor: Some(GpuVendor::Nvidia),
+                    capabilities: Some(GpuCapabilities {
+                        mig: self.enable_mig,
+                        sriov: false,
+                        mcm_tiles: false,
+                    }),
                     identity,
                     topo,
                     health: None,
@@ -700,69 +714,93 @@ impl Collector for GpuCollector {
                     .with_label_values(&[uuid_label, gpu_label.as_str()])
                     .inc_by(0);
                 // NvLink utilization/errors (best effort)
+                let mut fabric_links: Vec<FabricLink> = Vec::new();
                 for link_idx in 0..6u32 {
                     let mut link = device.link_wrapper_for(link_idx);
-                    if link.is_active().unwrap_or(false) {
-                        let link_label = link_idx.to_string();
-                        let _ = link.set_utilization_control(
-                            NvLinkCounter::One,
-                            UtilizationControl {
-                                units: UtilizationCountUnit::Bytes,
-                                packet_filter: PacketTypes::all(),
-                            },
-                            false,
-                        );
-                        if let Ok(util) = link.utilization_counter(NvLinkCounter::One) {
-                            let key = (idx, link_idx);
-                            let prev = self.nvlink_util_prev.get(&key).copied();
-                            if let Some((prev_rx, prev_tx)) = prev {
-                                if util.receive >= prev_rx {
-                                    metrics
-                                        .gpu_nvlink_rx_bytes_total
-                                        .with_label_values(&[
-                                            uuid_label,
-                                            gpu_label.as_str(),
-                                            link_label.as_str(),
-                                        ])
-                                        .inc_by(util.receive - prev_rx);
-                                }
-                                if util.send >= prev_tx {
-                                    metrics
-                                        .gpu_nvlink_tx_bytes_total
-                                        .with_label_values(&[
-                                            uuid_label,
-                                            gpu_label.as_str(),
-                                            link_label.as_str(),
-                                        ])
-                                        .inc_by(util.send - prev_tx);
-                                }
+                    if !link.is_active().unwrap_or(false) {
+                        continue;
+                    }
+                    let link_label = link_idx.to_string();
+                    let _ = link.set_utilization_control(
+                        NvLinkCounter::One,
+                        UtilizationControl {
+                            units: UtilizationCountUnit::Bytes,
+                            packet_filter: PacketTypes::all(),
+                        },
+                        false,
+                    );
+                    if let Ok(util) = link.utilization_counter(NvLinkCounter::One) {
+                        let key = (idx, link_idx);
+                        let prev = self.nvlink_util_prev.get(&key).copied();
+                        if let Some((prev_rx, prev_tx)) = prev {
+                            if util.receive >= prev_rx {
+                                metrics
+                                    .gpu_nvlink_rx_bytes_total
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        link_label.as_str(),
+                                    ])
+                                    .inc_by(util.receive - prev_rx);
                             }
-                            self.nvlink_util_prev.insert(key, (util.receive, util.send));
+                            if util.send >= prev_tx {
+                                metrics
+                                    .gpu_nvlink_tx_bytes_total
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        link_label.as_str(),
+                                    ])
+                                    .inc_by(util.send - prev_tx);
+                            }
                         }
+                        let mut rx_delta: Option<u64> = None;
+                        let mut tx_delta: Option<u64> = None;
+                        if let Some((prev_rx, prev_tx)) = prev {
+                            rx_delta = Some(util.receive.saturating_sub(prev_rx));
+                            tx_delta = Some(util.send.saturating_sub(prev_tx));
+                        }
+                        self.nvlink_util_prev.insert(key, (util.receive, util.send));
+                        if rx_delta.is_some() || tx_delta.is_some() {
+                            fabric_links.push(FabricLink {
+                                link: link_idx,
+                                link_type: FabricLinkType::NvLink,
+                                rx_bytes: rx_delta,
+                                tx_bytes: tx_delta,
+                                errors: None,
+                            });
+                        }
+                    }
 
-                        for (counter, label) in [
-                            (NvLinkErrorCounter::DlReplay, "dl_replay"),
-                            (NvLinkErrorCounter::DlRecovery, "dl_recovery"),
-                            (NvLinkErrorCounter::DlCrcFlit, "dl_crc_flit"),
-                            (NvLinkErrorCounter::DlCrcData, "dl_crc_data"),
-                        ] {
-                            if let Ok(val) = link.error_counter(counter) {
-                                let key = (idx, link_idx, label.to_string());
-                                let prev = self.nvlink_err_prev.get(&key).copied().unwrap_or(0);
-                                if val >= prev {
-                                    metrics
-                                        .gpu_nvlink_errors_total
-                                        .with_label_values(&[
-                                            uuid_label,
-                                            gpu_label.as_str(),
-                                            link_label.as_str(),
-                                        ])
-                                        .inc_by(val - prev);
-                                }
-                                self.nvlink_err_prev.insert(key, val);
+                    for (counter, label) in [
+                        (NvLinkErrorCounter::DlReplay, "dl_replay"),
+                        (NvLinkErrorCounter::DlRecovery, "dl_recovery"),
+                        (NvLinkErrorCounter::DlCrcFlit, "dl_crc_flit"),
+                        (NvLinkErrorCounter::DlCrcData, "dl_crc_data"),
+                    ] {
+                        if let Ok(val) = link.error_counter(counter) {
+                            let key = (idx, link_idx, label.to_string());
+                            let prev = self.nvlink_err_prev.get(&key).copied().unwrap_or(0);
+                            if val >= prev {
+                                metrics
+                                    .gpu_nvlink_errors_total
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        link_label.as_str(),
+                                    ])
+                                    .inc_by(val - prev);
+                            }
+                            self.nvlink_err_prev.insert(key, val);
+                            if let Some(f) = fabric_links.iter_mut().find(|f| f.link == link_idx) {
+                                let prev_err = f.errors.unwrap_or(0);
+                                f.errors = Some(prev_err + val.saturating_sub(prev_err));
                             }
                         }
                     }
+                }
+                if !fabric_links.is_empty() {
+                    status.fabric_links = Some(fabric_links);
                 }
 
                 // nvml-wrapper 0.9 exposes replay counter but not uncorrectable PCIe errors

@@ -1058,6 +1058,7 @@ mod tests {
     use agent_core::state::{GpuStatus, StatusSnapshot};
 
     use super::{AgentMode, AppState, MetricToggleState, NodeSummary};
+    use agent_core::state::GpuVendor;
 
     fn sample_status() -> StatusSnapshot {
         StatusSnapshot {
@@ -1074,10 +1075,13 @@ mod tests {
             gpus: vec![GpuStatus {
                 uuid: Some("GPU-TEST".to_string()),
                 gpu: "0".to_string(),
+                vendor: Some(GpuVendor::Nvidia),
+                capabilities: None,
                 identity: None,
                 topo: None,
                 health: None,
                 nvlink: None,
+                fabric_links: None,
                 mig_tree: None,
                 temperature_celsius: Some(70.0),
                 power_watts: Some(250.0),
@@ -1089,6 +1093,7 @@ mod tests {
                 clock_mem_mhz: None,
                 thermal_throttle: false,
                 power_throttle: false,
+                ..Default::default()
             }],
             cpu_cores: Some(16),
             cpu_util_percent: Some(55.0),

@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented here.
 
+## Release notes & policy
+- We follow semver: MAJOR for breaking config/CLI/metrics/labels, MINOR for additive, PATCH for fixes.
+- Deprecations are announced here and in release notes; removals occur only in the next MAJOR when possible.
+- Metric/label changes must include migration notes and, where feasible, compatibility labels during a deprecation window.
+- Platform validation updates (GPU/driver/CUDA/K8s) should be recorded here and in `docs/platform-matrix.md`.
+- UUID-first metrics: see `docs/migrations.md` for guidance. `_compat` metrics (when `k8s_mode` is enabled) are provided for a transition period; plan to move dashboards to UUID-based labels.
+
 ## Unreleased
 - Add GitHub Actions release pipeline, packaging via `scripts/dist/esnode-core-release.sh`, and artifact checksums.
 - Expanded GPU/MIG telemetry, K8s compatibility labels, and NVML FFI scaffolding.

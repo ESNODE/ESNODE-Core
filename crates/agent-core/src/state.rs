@@ -89,6 +89,10 @@ pub struct GpuStatus {
     pub uuid: Option<String>,
     pub gpu: String,
     #[serde(default)]
+    pub vendor: Option<GpuVendor>,
+    #[serde(default)]
+    pub capabilities: Option<GpuCapabilities>,
+    #[serde(default)]
     pub identity: Option<GpuIdentity>,
     #[serde(default)]
     pub topo: Option<GpuTopo>,
@@ -96,6 +100,8 @@ pub struct GpuStatus {
     pub health: Option<GpuHealth>,
     #[serde(default)]
     pub nvlink: Option<NvLinkState>,
+    #[serde(default)]
+    pub fabric_links: Option<Vec<FabricLink>>,
     #[serde(default)]
     pub mig_tree: Option<MigTree>,
     pub temperature_celsius: Option<f64>,
@@ -148,6 +154,16 @@ pub struct GpuTopo {
     pub pci_link_gen: Option<u32>,
     #[serde(default)]
     pub pci_link_width: Option<u32>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct GpuCapabilities {
+    #[serde(default)]
+    pub mig: bool,
+    #[serde(default)]
+    pub sriov: bool,
+    #[serde(default)]
+    pub mcm_tiles: bool,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -245,6 +261,46 @@ pub struct NvLinkStats {
     pub tx_bytes: Option<u64>,
     #[serde(default)]
     pub errors: Option<u64>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct FabricLink {
+    pub link: u32,
+    pub link_type: FabricLinkType,
+    #[serde(default)]
+    pub rx_bytes: Option<u64>,
+    #[serde(default)]
+    pub tx_bytes: Option<u64>,
+    #[serde(default)]
+    pub errors: Option<u64>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum FabricLinkType {
+    NvLink,
+    InfinityFabric,
+    XeLink,
+    Pcie,
+}
+
+impl Default for FabricLinkType {
+    fn default() -> Self {
+        FabricLinkType::Pcie
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub enum GpuVendor {
+    Nvidia,
+    Amd,
+    Intel,
+    Unknown,
+}
+
+impl Default for GpuVendor {
+    fn default() -> Self {
+        GpuVendor::Unknown
+    }
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]

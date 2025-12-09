@@ -104,6 +104,7 @@ enable_memory = true
 enable_disk = true
 enable_network = true
 enable_gpu = true
+enable_gpu_amd = false          # AMD GPUs (ROCm/rsmi) - experimental
 enable_power = true
 enable_gpu_mig = false         # set true to scrape MIG (requires gpu-nvml-ffi build)
 enable_gpu_events = false      # set true to run NVML event loop (best-effort)
@@ -141,6 +142,7 @@ esnode-core \
   --listen-address "0.0.0.0:9100" \
   --scrape-interval 5s \
   --enable-gpu true \
+  --enable-gpu-amd false \
   --enable-gpu-mig false \
   --enable-gpu-events false \
   --k8s-mode false \

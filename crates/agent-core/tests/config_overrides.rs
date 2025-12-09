@@ -12,6 +12,7 @@ fn overrides_apply_all_booleans_and_scalars() {
         enable_disk: Some(false),
         enable_network: Some(false),
         enable_gpu: Some(false),
+        enable_gpu_amd: Some(true),
         enable_power: Some(false),
         enable_gpu_mig: Some(true),
         enable_gpu_events: Some(true),
@@ -43,6 +44,7 @@ fn overrides_apply_all_booleans_and_scalars() {
     assert!(!base.enable_disk);
     assert!(!base.enable_network);
     assert!(!base.enable_gpu);
+    assert!(base.enable_gpu_amd);
     assert!(!base.enable_power);
     assert!(base.enable_gpu_mig);
     assert!(base.enable_gpu_events);

@@ -36,6 +36,8 @@ pub struct AgentConfig {
     pub enable_disk: bool,
     pub enable_network: bool,
     pub enable_gpu: bool,
+    #[serde(default)]
+    pub enable_gpu_amd: bool,
     pub enable_power: bool,
     #[serde(default)]
     pub enable_gpu_mig: bool,
@@ -86,6 +88,7 @@ impl Default for AgentConfig {
             enable_disk: true,
             enable_network: true,
             enable_gpu: true,
+            enable_gpu_amd: false,
             enable_power: true,
             enable_gpu_mig: false,
             enable_gpu_events: false,
@@ -120,6 +123,7 @@ pub struct ConfigOverrides {
     pub enable_disk: Option<bool>,
     pub enable_network: Option<bool>,
     pub enable_gpu: Option<bool>,
+    pub enable_gpu_amd: Option<bool>,
     pub enable_power: Option<bool>,
     #[serde(default)]
     pub enable_gpu_mig: Option<bool>,
@@ -182,6 +186,9 @@ impl AgentConfig {
         }
         if let Some(enable_gpu) = overrides.enable_gpu {
             self.enable_gpu = enable_gpu;
+        }
+        if let Some(enable_gpu_amd) = overrides.enable_gpu_amd {
+            self.enable_gpu_amd = enable_gpu_amd;
         }
         if let Some(enable_power) = overrides.enable_power {
             self.enable_power = enable_power;

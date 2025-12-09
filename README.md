@@ -70,6 +70,7 @@ Configuration precedence: CLI flags > env vars > `esnode.toml` > defaults. See `
 - Config flags of interest:
   - `enable_gpu_mig` (default false) – turn on MIG scraping when built with `gpu-nvml-ffi`.
   - `enable_gpu_events` (default false) – run NVML event loop (best-effort) for XID/ECC/clock/power events.
+  - `enable_gpu_amd` (default false) – experimental AMD/ROCm collector scaffolding; emits no metrics unless rsmi/rocm-smi support is added.
   - `k8s_mode` (default false) – emit compatibility labels using Kubernetes/CDI resource names alongside UUID/index labels.
   - `gpu_visible_devices` / `NVIDIA_VISIBLE_DEVICES` – filter visible GPUs.
   - `mig_config_devices` / `NVIDIA_MIG_CONFIG_DEVICES` – filter MIG-capable GPUs when `enable_gpu_mig` is true.
@@ -92,6 +93,8 @@ Community & policies:
 - Contribution guidelines: see `CONTRIBUTING.md`.
 - Code of Conduct: see `CODE_OF_CONDUCT.md`.
 - Security reporting: see `SECURITY.md`.
+- Support & upgrade policy: see `docs/support-policy.md`.
+- Metric label migration (UUID-first): see `docs/migrations.md`.
 
 ### Agent ↔ Server connection (summary)
 - Standalone: full local CLI/TUI, toggle metric sets, `/metrics` always on.
