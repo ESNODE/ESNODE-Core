@@ -1072,7 +1072,13 @@ mod tests {
             cpu_package_power_watts: vec![],
             cpu_temperatures: vec![],
             gpus: vec![GpuStatus {
+                uuid: Some("GPU-TEST".to_string()),
                 gpu: "0".to_string(),
+                identity: None,
+                topo: None,
+                health: None,
+                nvlink: None,
+                mig_tree: None,
                 temperature_celsius: Some(70.0),
                 power_watts: Some(250.0),
                 util_percent: Some(75.0),
@@ -1264,6 +1270,37 @@ fn build_gpu_table(status: Option<&StatusSnapshot>) -> Vec<Line<'static>> {
                         "OK"
                     }
                 )));
+                if gpu.health.is_some() || gpu.mig_tree.is_some() {
+                    let h = gpu_health_line(gpu);
+                    if !h.is_empty() {
+                        lines.push(Line::from(format!("      {h}")));
+                    }
+                    if let Some(tree) = gpu.mig_tree.as_ref() {
+                        let mut mig_line = format!(
+                            "MIG: {} / supported:{}",
+                            if tree.enabled { "enabled" } else { "disabled" },
+                            if tree.supported { "yes" } else { "no" }
+                        );
+                        if !tree.devices.is_empty() {
+                            let mut descs: Vec<String> = Vec::new();
+                            for d in tree.devices.iter().take(4) {
+                                let mut parts = Vec::new();
+                                if let Some(p) = d.profile.as_ref() {
+                                    parts.push(p.clone());
+                                }
+                                if let Some(pl) = d.placement.as_ref() {
+                                    parts.push(pl.clone());
+                                }
+                                descs.push(parts.join("@"));
+                            }
+                            if tree.devices.len() > 4 {
+                                descs.push(format!("+{} more", tree.devices.len() - 4));
+                            }
+                            mig_line.push_str(&format!(" | devices: {}", descs.join(", ")));
+                        }
+                        lines.push(Line::from(format!("      {mig_line}")));
+                    }
+                }
             }
         }
         Some(_) => {
@@ -1330,6 +1367,47 @@ fn gpu_owner(gpu: &GpuStatus) -> String {
     gpu.fan_percent
         .map(|v| format!("{v:>5.1}"))
         .unwrap_or_else(|| "svc".to_string())
+}
+
+fn gpu_health_line(gpu: &GpuStatus) -> String {
+    if let Some(h) = gpu.health.as_ref() {
+        let mut parts = Vec::new();
+        if let Some(p) = h.pstate {
+            parts.push(format!("pstate P{p}"));
+        }
+        if !h.throttle_reasons.is_empty() {
+            parts.push(format!("throttle: {}", h.throttle_reasons.join(",")));
+        }
+        if let Some(mode) = h.ecc_mode.as_ref() {
+            parts.push(format!("ECC {}", mode));
+        }
+        if let Some(r) = h.retired_pages {
+            parts.push(format!("retired_pages {}", r));
+        }
+        if let Some(xid) = h.last_xid {
+            parts.push(format!("last_xid {xid}"));
+        }
+        if let Some(enc) = h.encoder_util_percent {
+            parts.push(format!("enc {:.0}%", enc));
+        }
+        if let Some(dec) = h.decoder_util_percent {
+            parts.push(format!("dec {:.0}%", dec));
+        }
+        if let Some(cp) = h.copy_util_percent {
+            parts.push(format!("copy {:.0}%", cp));
+        }
+        if let Some(bar1) = h.bar1_used_bytes {
+            let total = h.bar1_total_bytes.unwrap_or(0);
+            parts.push(format!(
+                "BAR1 {} / {}",
+                human_bytes(bar1),
+                human_bytes(total)
+            ));
+        }
+        parts.join(" | ")
+    } else {
+        String::new()
+    }
 }
 
 #[derive(Default)]

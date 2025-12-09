@@ -1,0 +1,132 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  build:
+    name: build-and-package (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: esnode-core-linux-x86_64.tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: esnode-core-macos-aarch64.tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: esnode-core-windows-x86_64.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build (tests)
+        run: cargo test --workspace --locked --target ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package artifact (unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p artifacts
+          tar czf artifacts/${{ matrix.artifact }} -C target/${{ matrix.target }}/release esnode-core LICENSE README.md
+
+      - name: Package artifact (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          Compress-Archive -Path "target/${{ matrix.target }}/release/esnode-core.exe","LICENSE","README.md" -DestinationPath "artifacts/${{ matrix.artifact }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: artifacts/${{ matrix.artifact }}
+
+  linux-packages:
+    name: linux-packages (tar/deb/rpm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install cross toolchains (best-effort)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 || true
+      - name: Build release artifacts via script
+        env:
+          ESNODE_VERSION: ${{ github.ref_name }}
+        run: |
+          # Strip leading v if present
+          if [[ -n "${ESNODE_VERSION}" ]]; then
+            ESNODE_VERSION="${ESNODE_VERSION#v}"
+          fi
+          export ESNODE_VERSION
+          bash scripts/dist/esnode-core-release.sh
+      - name: Upload linux package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-packages
+          path: public/distribution/releases/**
+
+  lint:
+    name: lint (fmt + clippy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+      - name: cargo clippy
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
+
+  release:
+    name: publish-release
+    needs:
+      - build
+      - linux-packages
+      - lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -type f -maxdepth 2 -print0 | sort -z | xargs -0 shasum -a 256 > SHA256SUMS.txt
+      - name: Create SBOM (CycloneDX)
+        run: |
+          cargo install cyclonedx-bom || true
+          # Generate SBOM for workspace (best-effort; ignore failure if tool unavailable)
+          if command -v cyclonedx-bom >/dev/null 2>&1; then
+            cyclonedx-bom -o artifacts/SBOM.json || true
+          fi
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*/*
+            artifacts/SHA256SUMS.txt
+            artifacts/SBOM.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

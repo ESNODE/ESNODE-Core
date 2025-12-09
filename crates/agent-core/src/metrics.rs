@@ -5,6 +5,10 @@ use prometheus::{
     Registry, TextEncoder,
 };
 
+const GPU_LABELS: &[&str] = &["uuid", "index"];
+const GPU_LINK_LABELS: &[&str] = &["uuid", "index", "link"];
+const MIG_LABELS: &[&str] = &["gpu_uuid", "gpu_index", "mig"];
+
 #[derive(Clone)]
 pub struct MetricsRegistry {
     registry: Registry,
@@ -55,19 +59,41 @@ pub struct MetricsRegistry {
     pub gpu_memory_used_bytes: GaugeVec,
     pub gpu_temperature_celsius: GaugeVec,
     pub gpu_power_watts: GaugeVec,
+    // Compatibility metrics (single gpu label) to help legacy dashboards when k8s_mode is enabled.
+    pub gpu_utilization_percent_compat: GaugeVec,
+    pub gpu_memory_used_bytes_compat: GaugeVec,
+    pub gpu_temperature_celsius_compat: GaugeVec,
+    pub gpu_power_watts_compat: GaugeVec,
     pub gpu_power_limit_watts: GaugeVec,
     pub gpu_ecc_errors_total: IntCounterVec,
+    pub gpu_ecc_corrected_total: IntCounterVec,
+    pub gpu_ecc_uncorrected_total: IntCounterVec,
+    pub gpu_ecc_mode: GaugeVec,
+    pub gpu_retired_pages_total: IntCounterVec,
+    pub gpu_last_xid_code: GaugeVec,
+    pub gpu_last_event_unix_ms: GaugeVec,
     pub gpu_energy_joules_total: IntCounterVec,
+    pub gpu_xid_errors_total: IntCounterVec,
     pub gpu_pcie_tx_bytes_total: IntCounterVec,
     pub gpu_pcie_rx_bytes_total: IntCounterVec,
+    pub gpu_pcie_correctable_errors_total: IntCounterVec,
+    pub gpu_pcie_atomic_requests_total: IntCounterVec,
     pub gpu_nvlink_errors_total: IntCounterVec,
     pub gpu_pcie_replay_errors_total: IntCounterVec,
     pub gpu_pcie_uncorrectable_errors_total: IntCounterVec,
+    pub gpu_nvswitch_errors_total: IntCounterVec,
     pub gpu_fan_speed_percent: GaugeVec,
     pub gpu_clock_sm_mhz: GaugeVec,
     pub gpu_clock_mem_mhz: GaugeVec,
     pub gpu_clock_graphics_mhz: GaugeVec,
+    pub gpu_pstate: GaugeVec,
+    pub gpu_bar1_used_bytes: GaugeVec,
+    pub gpu_bar1_total_bytes: GaugeVec,
+    pub gpu_encoder_utilization_percent: GaugeVec,
+    pub gpu_decoder_utilization_percent: GaugeVec,
+    pub gpu_copy_utilization_percent: GaugeVec,
     pub gpu_throttle_reason: GaugeVec,
+    pub gpu_events_total: IntCounterVec,
     pub cpu_temperature_celsius: GaugeVec,
     pub gpu_nvlink_rx_bytes_total: IntCounterVec,
     pub gpu_nvlink_tx_bytes_total: IntCounterVec,
@@ -76,7 +102,15 @@ pub struct MetricsRegistry {
     pub mig_memory_total_bytes: GaugeVec,
     pub mig_sm_count: GaugeVec,
     pub mig_energy_joules_total: IntCounterVec,
+    pub mig_ecc_corrected_total: IntCounterVec,
+    pub mig_ecc_uncorrected_total: IntCounterVec,
+    pub mig_bar1_total_bytes: GaugeVec,
+    pub mig_bar1_used_bytes: GaugeVec,
     pub gpu_mig_supported: GaugeVec,
+    pub gpu_mig_enabled: GaugeVec,
+    pub mig_info: GaugeVec,
+    pub mig_gpu_instance_info: GaugeVec,
+    pub mig_compute_instance_info: GaugeVec,
     pub pcie_bandwidth_percent: GaugeVec,
     pub pcie_link_width: GaugeVec,
     pub pcie_link_gen: GaugeVec,
@@ -350,33 +384,61 @@ impl MetricsRegistry {
                 "esnode_gpu_utilization_percent",
                 "GPU utilization percentage per device",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let gpu_memory_total_bytes = GaugeVec::new(
             Opts::new(
                 "esnode_gpu_memory_total_bytes",
                 "Total GPU memory in bytes per device",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let gpu_memory_used_bytes = GaugeVec::new(
             Opts::new(
                 "esnode_gpu_memory_used_bytes",
                 "Used GPU memory in bytes per device",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let gpu_temperature_celsius = GaugeVec::new(
             Opts::new(
                 "esnode_gpu_temperature_celsius",
                 "GPU temperature in Celsius per device",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let gpu_power_watts = GaugeVec::new(
             Opts::new(
                 "esnode_gpu_power_watts",
                 "Instantaneous GPU power draw in watts per device",
+            ),
+            GPU_LABELS,
+        )?;
+        let gpu_utilization_percent_compat = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_utilization_percent_compat",
+                "GPU utilization percent (legacy single gpu label)",
+            ),
+            &["gpu"],
+        )?;
+        let gpu_memory_used_bytes_compat = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_memory_used_bytes_compat",
+                "Used GPU memory (legacy single gpu label)",
+            ),
+            &["gpu"],
+        )?;
+        let gpu_temperature_celsius_compat = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_temperature_celsius_compat",
+                "GPU temperature (legacy single gpu label)",
+            ),
+            &["gpu"],
+        )?;
+        let gpu_power_watts_compat = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_power_watts_compat",
+                "GPU power (legacy single gpu label)",
             ),
             &["gpu"],
         )?;
@@ -385,56 +447,117 @@ impl MetricsRegistry {
                 "esnode_gpu_power_limit_watts",
                 "GPU power management limit in watts per device",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let gpu_ecc_errors_total = IntCounterVec::new(
             Opts::new(
                 "esnode_gpu_ecc_errors_total",
                 "Total ECC error count per GPU device",
             ),
-            &["gpu", "type"],
+            &["uuid", "index", "type"],
+        )?;
+        let gpu_ecc_corrected_total = IntCounterVec::new(
+            Opts::new(
+                "esnode_gpu_ecc_corrected_total",
+                "Corrected ECC errors per GPU by scope",
+            ),
+            &["uuid", "index", "scope"],
+        )?;
+        let gpu_ecc_uncorrected_total = IntCounterVec::new(
+            Opts::new(
+                "esnode_gpu_ecc_uncorrected_total",
+                "Uncorrected ECC errors per GPU by scope",
+            ),
+            &["uuid", "index", "scope"],
+        )?;
+        let gpu_ecc_mode = GaugeVec::new(
+            Opts::new("esnode_gpu_ecc_mode", "ECC mode enabled=1 disabled=0"),
+            GPU_LABELS,
+        )?;
+        let gpu_last_xid_code = GaugeVec::new(
+            Opts::new("esnode_gpu_last_xid_code", "Last XID code seen"),
+            GPU_LABELS,
+        )?;
+        let gpu_last_event_unix_ms = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_last_event_unix_ms",
+                "Last GPU event timestamp (ms since epoch)",
+            ),
+            GPU_LABELS,
+        )?;
+        let gpu_xid_errors_total = IntCounterVec::new(
+            Opts::new("esnode_gpu_xid_errors_total", "Total XID errors per GPU"),
+            GPU_LABELS,
+        )?;
+        let gpu_retired_pages_total = IntCounterVec::new(
+            Opts::new(
+                "esnode_gpu_retired_pages_total",
+                "Total retired pages per GPU (all causes)",
+            ),
+            GPU_LABELS,
         )?;
         let gpu_energy_joules_total = IntCounterVec::new(
             Opts::new(
                 "esnode_gpu_energy_joules_total",
                 "Accumulated GPU energy consumption in joules",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let gpu_pcie_tx_bytes_total = IntCounterVec::new(
             Opts::new(
                 "esnode_gpu_pcie_tx_bytes_total",
                 "Total PCIe transmit bytes per GPU",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let gpu_pcie_rx_bytes_total = IntCounterVec::new(
             Opts::new(
                 "esnode_gpu_pcie_rx_bytes_total",
                 "Total PCIe receive bytes per GPU",
             ),
-            &["gpu"],
+            GPU_LABELS,
+        )?;
+        let gpu_pcie_correctable_errors_total = IntCounterVec::new(
+            Opts::new(
+                "esnode_gpu_pcie_correctable_errors_total",
+                "PCIe correctable errors per GPU (best effort)",
+            ),
+            GPU_LABELS,
+        )?;
+        let gpu_pcie_atomic_requests_total = IntCounterVec::new(
+            Opts::new(
+                "esnode_gpu_pcie_atomic_requests_total",
+                "PCIe atomic requests per GPU (best effort)",
+            ),
+            GPU_LABELS,
         )?;
         let gpu_nvlink_errors_total = IntCounterVec::new(
             Opts::new(
                 "esnode_gpu_nvlink_errors_total",
                 "NVLink error counters per link",
             ),
-            &["gpu", "link"],
+            GPU_LINK_LABELS,
         )?;
         let gpu_pcie_replay_errors_total = IntCounterVec::new(
             Opts::new(
                 "esnode_gpu_pcie_replay_errors_total",
                 "PCIe replay/correctable errors per GPU",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let gpu_pcie_uncorrectable_errors_total = IntCounterVec::new(
             Opts::new(
                 "esnode_gpu_pcie_uncorrectable_errors_total",
                 "PCIe uncorrectable errors per GPU",
             ),
-            &["gpu"],
+            GPU_LABELS,
+        )?;
+        let gpu_nvswitch_errors_total = IntCounterVec::new(
+            Opts::new(
+                "esnode_gpu_nvswitch_errors_total",
+                "NVSwitch error counters per GPU (best effort)",
+            ),
+            GPU_LABELS,
         )?;
 
         let gpu_fan_speed_percent = GaugeVec::new(
@@ -442,7 +565,7 @@ impl MetricsRegistry {
                 "esnode_gpu_fan_speed_percent",
                 "GPU fan speed percentage per device",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
 
         let gpu_clock_sm_mhz = GaugeVec::new(
@@ -450,19 +573,52 @@ impl MetricsRegistry {
                 "esnode_gpu_clock_sm_mhz",
                 "Streaming multiprocessor clock speed in MHz",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
 
         let gpu_clock_mem_mhz = GaugeVec::new(
             Opts::new("esnode_gpu_clock_mem_mhz", "Memory clock speed in MHz"),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let gpu_clock_graphics_mhz = GaugeVec::new(
             Opts::new(
                 "esnode_gpu_clock_graphics_mhz",
                 "Graphics clock speed in MHz",
             ),
-            &["gpu"],
+            GPU_LABELS,
+        )?;
+        let gpu_pstate = GaugeVec::new(
+            Opts::new("esnode_gpu_pstate", "Current GPU performance state (P0..P15)"),
+            GPU_LABELS,
+        )?;
+        let gpu_bar1_used_bytes = GaugeVec::new(
+            Opts::new("esnode_gpu_bar1_used_bytes", "BAR1 used bytes per GPU"),
+            GPU_LABELS,
+        )?;
+        let gpu_bar1_total_bytes = GaugeVec::new(
+            Opts::new("esnode_gpu_bar1_total_bytes", "BAR1 total bytes per GPU"),
+            GPU_LABELS,
+        )?;
+        let gpu_encoder_utilization_percent = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_encoder_utilization_percent",
+                "Encoder utilization percent per GPU",
+            ),
+            GPU_LABELS,
+        )?;
+        let gpu_decoder_utilization_percent = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_decoder_utilization_percent",
+                "Decoder utilization percent per GPU",
+            ),
+            GPU_LABELS,
+        )?;
+        let gpu_copy_utilization_percent = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_copy_utilization_percent",
+                "Copy engine utilization percent per GPU (best effort)",
+            ),
+            GPU_LABELS,
         )?;
 
         let gpu_throttle_reason = GaugeVec::new(
@@ -470,7 +626,14 @@ impl MetricsRegistry {
                 "esnode_gpu_throttle_reason",
                 "GPU throttle reason flag (1 active, 0 inactive)",
             ),
-            &["gpu", "reason"],
+            &["uuid", "index", "reason"],
+        )?;
+        let gpu_events_total = IntCounterVec::new(
+            Opts::new(
+                "esnode_gpu_events_total",
+                "GPU event counts (xid, ecc, retire, pstate, clock)",
+            ),
+            &["uuid", "index", "event"],
         )?;
 
         let cpu_temperature_celsius = GaugeVec::new(
@@ -486,7 +649,7 @@ impl MetricsRegistry {
                 "esnode_gpu_nvlink_rx_bytes_total",
                 "Total NVLink receive bytes (if supported)",
             ),
-            &["gpu", "link"],
+            GPU_LINK_LABELS,
         )?;
 
         let gpu_nvlink_tx_bytes_total = IntCounterVec::new(
@@ -494,58 +657,108 @@ impl MetricsRegistry {
                 "esnode_gpu_nvlink_tx_bytes_total",
                 "Total NVLink transmit bytes (if supported)",
             ),
-            &["gpu", "link"],
+            GPU_LINK_LABELS,
         )?;
         let mig_utilization_percent = GaugeVec::new(
             Opts::new(
                 "esnode_mig_utilization_percent",
                 "MIG instance utilization percent",
             ),
-            &["gpu", "instance"],
+            MIG_LABELS,
         )?;
         let mig_memory_used_bytes = GaugeVec::new(
             Opts::new("esnode_mig_memory_used_bytes", "Used memory per MIG slice"),
-            &["gpu", "instance"],
+            MIG_LABELS,
         )?;
         let mig_memory_total_bytes = GaugeVec::new(
             Opts::new(
                 "esnode_mig_memory_total_bytes",
                 "Total memory per MIG slice",
             ),
-            &["gpu", "instance"],
+            MIG_LABELS,
         )?;
         let mig_sm_count = GaugeVec::new(
             Opts::new("esnode_mig_sm_count", "SM count assigned to MIG slice"),
-            &["gpu", "instance"],
+            MIG_LABELS,
         )?;
         let mig_energy_joules_total = IntCounterVec::new(
             Opts::new(
                 "esnode_mig_energy_joules_total",
                 "Estimated MIG slice energy",
             ),
-            &["gpu", "instance"],
+            MIG_LABELS,
+        )?;
+        let mig_ecc_corrected_total = IntCounterVec::new(
+            Opts::new(
+                "esnode_mig_ecc_corrected_total",
+                "Corrected ECC errors per MIG device",
+            ),
+            MIG_LABELS,
+        )?;
+        let mig_ecc_uncorrected_total = IntCounterVec::new(
+            Opts::new(
+                "esnode_mig_ecc_uncorrected_total",
+                "Uncorrected ECC errors per MIG device",
+            ),
+            MIG_LABELS,
+        )?;
+        let mig_bar1_total_bytes = GaugeVec::new(
+            Opts::new("esnode_mig_bar1_total_bytes", "BAR1 total bytes per MIG device"),
+            MIG_LABELS,
+        )?;
+        let mig_bar1_used_bytes = GaugeVec::new(
+            Opts::new("esnode_mig_bar1_used_bytes", "BAR1 used bytes per MIG device"),
+            MIG_LABELS,
         )?;
         let gpu_mig_supported = GaugeVec::new(
             Opts::new(
                 "esnode_gpu_mig_supported",
                 "1 if MIG metrics are supported on this GPU, 0 otherwise",
             ),
-            &["gpu"],
+            GPU_LABELS,
+        )?;
+        let gpu_mig_enabled = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_mig_enabled",
+                "1 if MIG mode is enabled on this GPU, 0 otherwise",
+            ),
+            GPU_LABELS,
+        )?;
+        let mig_info = GaugeVec::new(
+            Opts::new(
+                "esnode_mig_info",
+                "MIG instance info (profile/placement labels, value=1)",
+            ),
+            &["gpu_uuid", "gpu_index", "mig", "profile", "placement"],
+        )?;
+        let mig_gpu_instance_info = GaugeVec::new(
+            Opts::new(
+                "esnode_mig_gpu_instance_info",
+                "MIG GPU instance info (profile/placement labels, value=1)",
+            ),
+            &["gpu_uuid", "gpu_index", "gi", "profile", "placement"],
+        )?;
+        let mig_compute_instance_info = GaugeVec::new(
+            Opts::new(
+                "esnode_mig_compute_instance_info",
+                "MIG Compute instance info (profile/placement labels, value=1)",
+            ),
+            &["gpu_uuid", "gpu_index", "gi", "ci", "profile", "eng_profile", "placement"],
         )?;
         let pcie_bandwidth_percent = GaugeVec::new(
             Opts::new(
                 "esnode_pcie_bandwidth_percent",
                 "PCIe bandwidth saturation percentage",
             ),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let pcie_link_width = GaugeVec::new(
             Opts::new("esnode_pcie_link_width", "Current PCIe link width (lanes)"),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let pcie_link_gen = GaugeVec::new(
             Opts::new("esnode_pcie_link_gen", "Current PCIe link generation"),
-            &["gpu"],
+            GPU_LABELS,
         )?;
         let nvswitch_errors_total = IntCounterVec::new(
             Opts::new("esnode_nvswitch_errors_total", "NVSwitch error counters"),
@@ -695,14 +908,28 @@ impl MetricsRegistry {
             gpu_memory_used_bytes,
             gpu_temperature_celsius,
             gpu_power_watts,
+            gpu_utilization_percent_compat,
+            gpu_memory_used_bytes_compat,
+            gpu_temperature_celsius_compat,
+            gpu_power_watts_compat,
             gpu_power_limit_watts,
             gpu_ecc_errors_total,
+            gpu_ecc_corrected_total,
+            gpu_ecc_uncorrected_total,
+            gpu_ecc_mode,
+            gpu_retired_pages_total,
+            gpu_last_xid_code,
+            gpu_last_event_unix_ms,
+            gpu_xid_errors_total,
             gpu_energy_joules_total,
             gpu_pcie_tx_bytes_total,
             gpu_pcie_rx_bytes_total,
+            gpu_pcie_correctable_errors_total,
+            gpu_pcie_atomic_requests_total,
             gpu_nvlink_errors_total,
             gpu_pcie_replay_errors_total,
             gpu_pcie_uncorrectable_errors_total,
+            gpu_nvswitch_errors_total,
             agent_scrape_duration_seconds,
             agent_errors_total,
             cpu_package_power_watts,
@@ -712,7 +939,14 @@ impl MetricsRegistry {
             gpu_clock_sm_mhz,
             gpu_clock_mem_mhz,
             gpu_clock_graphics_mhz,
+            gpu_pstate,
+            gpu_bar1_used_bytes,
+            gpu_bar1_total_bytes,
+            gpu_encoder_utilization_percent,
+            gpu_decoder_utilization_percent,
+            gpu_copy_utilization_percent,
             gpu_throttle_reason,
+            gpu_events_total,
             cpu_temperature_celsius,
             gpu_nvlink_rx_bytes_total,
             gpu_nvlink_tx_bytes_total,
@@ -721,7 +955,15 @@ impl MetricsRegistry {
             mig_memory_total_bytes,
             mig_sm_count,
             mig_energy_joules_total,
+            mig_ecc_corrected_total,
+            mig_ecc_uncorrected_total,
+            mig_bar1_total_bytes,
+            mig_bar1_used_bytes,
             gpu_mig_supported,
+            gpu_mig_enabled,
+            mig_info,
+            mig_gpu_instance_info,
+            mig_compute_instance_info,
             pcie_bandwidth_percent,
             pcie_link_width,
             pcie_link_gen,
@@ -795,19 +1037,40 @@ impl MetricsRegistry {
             Box::new(self.gpu_memory_used_bytes.clone()),
             Box::new(self.gpu_temperature_celsius.clone()),
             Box::new(self.gpu_power_watts.clone()),
+            Box::new(self.gpu_utilization_percent_compat.clone()),
+            Box::new(self.gpu_memory_used_bytes_compat.clone()),
+            Box::new(self.gpu_temperature_celsius_compat.clone()),
+            Box::new(self.gpu_power_watts_compat.clone()),
             Box::new(self.gpu_power_limit_watts.clone()),
             Box::new(self.gpu_ecc_errors_total.clone()),
+            Box::new(self.gpu_ecc_corrected_total.clone()),
+            Box::new(self.gpu_ecc_uncorrected_total.clone()),
+            Box::new(self.gpu_ecc_mode.clone()),
+            Box::new(self.gpu_retired_pages_total.clone()),
+            Box::new(self.gpu_last_xid_code.clone()),
+            Box::new(self.gpu_last_event_unix_ms.clone()),
+            Box::new(self.gpu_xid_errors_total.clone()),
             Box::new(self.gpu_energy_joules_total.clone()),
             Box::new(self.gpu_pcie_tx_bytes_total.clone()),
             Box::new(self.gpu_pcie_rx_bytes_total.clone()),
+            Box::new(self.gpu_pcie_correctable_errors_total.clone()),
+            Box::new(self.gpu_pcie_atomic_requests_total.clone()),
             Box::new(self.gpu_nvlink_errors_total.clone()),
             Box::new(self.gpu_pcie_replay_errors_total.clone()),
             Box::new(self.gpu_pcie_uncorrectable_errors_total.clone()),
+            Box::new(self.gpu_nvswitch_errors_total.clone()),
             Box::new(self.gpu_fan_speed_percent.clone()),
             Box::new(self.gpu_clock_sm_mhz.clone()),
             Box::new(self.gpu_clock_mem_mhz.clone()),
             Box::new(self.gpu_clock_graphics_mhz.clone()),
+            Box::new(self.gpu_pstate.clone()),
+            Box::new(self.gpu_bar1_used_bytes.clone()),
+            Box::new(self.gpu_bar1_total_bytes.clone()),
+            Box::new(self.gpu_encoder_utilization_percent.clone()),
+            Box::new(self.gpu_decoder_utilization_percent.clone()),
+            Box::new(self.gpu_copy_utilization_percent.clone()),
             Box::new(self.gpu_throttle_reason.clone()),
+            Box::new(self.gpu_events_total.clone()),
             Box::new(self.cpu_temperature_celsius.clone()),
             Box::new(self.gpu_nvlink_rx_bytes_total.clone()),
             Box::new(self.gpu_nvlink_tx_bytes_total.clone()),
@@ -816,7 +1079,15 @@ impl MetricsRegistry {
             Box::new(self.mig_memory_total_bytes.clone()),
             Box::new(self.mig_sm_count.clone()),
             Box::new(self.mig_energy_joules_total.clone()),
+            Box::new(self.mig_ecc_corrected_total.clone()),
+            Box::new(self.mig_ecc_uncorrected_total.clone()),
+            Box::new(self.mig_bar1_total_bytes.clone()),
+            Box::new(self.mig_bar1_used_bytes.clone()),
             Box::new(self.gpu_mig_supported.clone()),
+            Box::new(self.gpu_mig_enabled.clone()),
+            Box::new(self.mig_info.clone()),
+            Box::new(self.mig_gpu_instance_info.clone()),
+            Box::new(self.mig_compute_instance_info.clone()),
             Box::new(self.pcie_bandwidth_percent.clone()),
             Box::new(self.pcie_link_width.clone()),
             Box::new(self.pcie_link_gen.clone()),

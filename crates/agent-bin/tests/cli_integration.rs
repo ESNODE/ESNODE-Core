@@ -1,17 +1,20 @@
 use std::{
     fs,
-    io::{Read, Write},
+    io::Write,
     net::TcpListener,
     thread,
 };
 
-use assert_cmd::Command;
+use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::str::contains;
 use tempfile::TempDir;
 
-fn start_mock_server() -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock server");
-    let addr = listener.local_addr().unwrap();
+fn start_mock_server() -> Option<(String, thread::JoinHandle<()>)> {
+    let listener = match TcpListener::bind("127.0.0.1:0") {
+        Ok(l) => l,
+        Err(_) => return None,
+    };
+    let addr = listener.local_addr().ok()?;
 
     let handle = thread::spawn(move || {
         for incoming in listener.incoming().flatten() {
@@ -64,13 +67,16 @@ fn start_mock_server() -> (String, thread::JoinHandle<()>) {
         }
     });
 
-    (format!("127.0.0.1:{}", addr.port()), handle)
+    Some((format!("127.0.0.1:{}", addr.port()), handle))
 }
 
 #[test]
 fn cli_status_reads_mock_server() {
-    let (addr, handle) = start_mock_server();
-    let mut cmd = Command::cargo_bin("esnode-core").unwrap();
+    let Some((addr, handle)) = start_mock_server() else {
+        // Environment may disallow binding sockets.
+        return;
+    };
+    let mut cmd = cargo_bin_cmd!("esnode-core");
     cmd.args(["--listen-address", &addr, "status"])
         .assert()
         .success()
@@ -80,8 +86,11 @@ fn cli_status_reads_mock_server() {
 
 #[test]
 fn cli_metrics_fetches_mock_metrics() {
-    let (addr, handle) = start_mock_server();
-    let mut cmd = Command::cargo_bin("esnode-core").unwrap();
+    let Some((addr, handle)) = start_mock_server() else {
+        // Environment may disallow binding sockets.
+        return;
+    };
+    let mut cmd = cargo_bin_cmd!("esnode-core");
     cmd.args(["--listen-address", &addr, "metrics"])
         .assert()
         .success()
@@ -94,8 +103,7 @@ fn cli_enable_metric_set_persists_config() {
     let tmp = TempDir::new().unwrap();
     let config_path = tmp.path().join("esnode.toml");
 
-    Command::cargo_bin("esnode-core")
-        .unwrap()
+    cargo_bin_cmd!("esnode-core")
         .args([
             "--config",
             config_path.to_str().unwrap(),

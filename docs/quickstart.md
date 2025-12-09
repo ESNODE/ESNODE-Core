@@ -105,6 +105,11 @@ enable_disk = true
 enable_network = true
 enable_gpu = true
 enable_power = true
+enable_gpu_mig = false         # set true to scrape MIG (requires gpu-nvml-ffi build)
+enable_gpu_events = false      # set true to run NVML event loop (best-effort)
+k8s_mode = false               # emit compat GPU/MIG labels like nvidia.com/gpu
+gpu_visible_devices = "all"    # or CSV / env NVIDIA_VISIBLE_DEVICES
+mig_config_devices = ""        # or CSV / env NVIDIA_MIG_CONFIG_DEVICES
 node_power_envelope_watts = 1200.0
 log_level = "info"
 # Optional on-agent TSDB buffer for short-term history/backfill (disabled by default)
@@ -136,6 +141,11 @@ esnode-core \
   --listen-address "0.0.0.0:9100" \
   --scrape-interval 5s \
   --enable-gpu true \
+  --enable-gpu-mig false \
+  --enable-gpu-events false \
+  --k8s-mode false \
+  --gpu-visible-devices "all" \
+  --mig-config-devices "" \
   --log-level info \
   --enable-local-tsdb true \
   --local-tsdb-path "/var/lib/esnode/tsdb" \
@@ -147,6 +157,12 @@ Local TSDB:
 - Periodic flush (30s) and flush-on-shutdown; retention + disk budget pruning.
 - Export for backfill: `GET /tsdb/export?from=...&to=...&metrics=esnode_*` returns newline Prom-compatible samples.
   Storage is JSON Lines per time block under `local_tsdb_path`.
+
+GPU/MIG visibility notes:
+- MIG metrics only emit when compiled with `gpu-nvml-ffi` and `enable_gpu_mig = true`. Without both, MIG series stay at zero.
+- Visibility filters honor `gpu_visible_devices`/`NVIDIA_VISIBLE_DEVICES`; MIG scraping additionally honors `mig_config_devices`/`NVIDIA_MIG_CONFIG_DEVICES`.
+- `k8s_mode = true` publishes compatibility labels (`nvidia.com/gpu`, `nvidia.com/mig-<profile>`) in addition to UUID/index labels.
+- `enable_gpu_events = true` starts a best-effort NVML event loop (short timeout) for XID/ECC/clock/power events; not guaranteed to capture every burst.
 ```
 
 Common control-plane commands:

@@ -14,13 +14,24 @@ Packaging is provided as tar.gz plus optional deb/rpm; Windows zips are included
 
 ESNODE-Core is a GPU-aware host metrics exporter for Linux nodes. It exposes CPU, memory, disk, network, and GPU telemetry at `/metrics` in Prometheus text format so observability stacks can scrape a single endpoint per node. Agents can run standalone or attach to an ESNODE-Pulse control plane while keeping Prometheus/OTLP outputs unchanged.
 
+### GPU/MIG visibility and build requirements
+- GPU metrics require the `gpu` feature (enabled by default). MIG metrics additionally require building with the `gpu-nvml-ffi` feature and enabling `enable_gpu_mig` in config; otherwise MIG metrics will remain zero.
+- `gpu_visible_devices` (or `NVIDIA_VISIBLE_DEVICES`) filters which GPUs are scraped; empty/`all` scrapes all.
+- `mig_config_devices` (or `NVIDIA_MIG_CONFIG_DEVICES`) further filters which GPUs are considered for MIG scraping when `enable_gpu_mig` is true.
+- `k8s_mode` emits a small set of legacy-compatible GPU metrics with a single `gpu` label (suffix `_compat`) using Kubernetes/CDI resource-style names (`nvidia.com/gpu`, `nvidia.com/gpu-<mig-profile>-mig`) alongside the UUID+index labeled metrics to reduce dashboard breakage.
+- MIG compatibility labels are only emitted when `k8s_mode` is enabled; MIG info/metrics still require `gpu-nvml-ffi` + `enable_gpu_mig`.
+- `enable_gpu_events` starts an NVML event loop for XID/ECC/power/clock events (best-effort). The loop is non-blocking with a short poll and may miss very bursty streams; counters are monotonic but not guaranteed exact.
+- `gpu-nvml-ffi-ext` is an optional feature gate for extra NVML FFI (PCIe field counters, etc.). These are best-effort and unverified without suitable hardware; placeholders remain zero when unsupported.
+- NVSwitch/copy-engine clocks/power-cap reason codes are exposed as gauges but rely on NVML support; many remain zero on hardware/driver versions that do not surface them.
+
+
 ## Features (v0.1 scope)
 - Single binary with zero-config defaults (`0.0.0.0:9100`, 5s interval).
 - Collectors: CPU, memory, disk, network, GPU (NVML-based; gracefully disabled if unavailable).
 - Power-aware: optional power collector reads RAPL/hwmon/BMC paths for CPU/package/node power; GPU power via NVML.
 - Self-observability: scrape duration + error counters per collector.
 - Health endpoint at `/healthz`.
-- JSON status endpoint at `/status` (`/v1/status` alias) with node load, power, temps, GPU snapshot, last scrape/errors; SSE stream at `/events` for near-real-time loops.
+- JSON status endpoint at `/status` (`/v1/status` alias) with node load, power, temps, GPU snapshot (identity/health/MIG tree), last scrape/errors; SSE stream at `/events` for near-real-time loops.
 
 ## Power- & Model-awareness (roadmap)
 - Power: keep `esnode_gpu_power_watts` and add optional `esnode_cpu_package_power_watts`, `esnode_node_power_watts`, and PDU/BMC readings where available (RAPL/hwmon/IPMI).
@@ -56,6 +67,31 @@ cargo build --workspace --release
 ```
 
 Configuration precedence: CLI flags > env vars > `esnode.toml` > defaults. See `docs/quickstart.md` for full examples.
+- Config flags of interest:
+  - `enable_gpu_mig` (default false) – turn on MIG scraping when built with `gpu-nvml-ffi`.
+  - `enable_gpu_events` (default false) – run NVML event loop (best-effort) for XID/ECC/clock/power events.
+  - `k8s_mode` (default false) – emit compatibility labels using Kubernetes/CDI resource names alongside UUID/index labels.
+  - `gpu_visible_devices` / `NVIDIA_VISIBLE_DEVICES` – filter visible GPUs.
+  - `mig_config_devices` / `NVIDIA_MIG_CONFIG_DEVICES` – filter MIG-capable GPUs when `enable_gpu_mig` is true.
+  - Optional `gpu-nvml-ffi-ext` feature enables additional NVML field-based counters (PCIe/etc.), best-effort only.
+
+### Releases & GitHub tagging
+- Tagging `vX.Y.Z` on the default branch triggers `.github/workflows/release.yml`, which:
+  - Runs `cargo test --workspace --locked --target <triple>` on Linux (x86_64), macOS (aarch64), and Windows (x86_64).
+  - Builds release binaries with default features for the same triples.
+  - Packages artifacts as tar.gz (Linux/macOS) or zip (Windows) and attaches them to the GitHub Release created from the tag.
+- Artifact names:
+  - `esnode-core-linux-x86_64.tar.gz`
+  - `esnode-core-macos-aarch64.tar.gz`
+  - `esnode-core-windows-x86_64.zip`
+- Binaries are built with default features; MIG metrics still require `gpu-nvml-ffi` and `enable_gpu_mig` when running on MIG-capable hosts.
+- For additional targets or feature builds, run `cargo build --release --locked --target <triple>` locally and publish as needed.
+- Manual packaging: `scripts/dist/esnode-core-release.sh` (optionally with `ESNODE_VERSION=X.Y.Z`) builds and collects Linux tar/deb/rpm bundles (and Windows zip if toolchain available) under `public/distribution/releases/`. Push a tag `vX.Y.Z` after verification to publish GitHub release artifacts automatically.
+
+Community & policies:
+- Contribution guidelines: see `CONTRIBUTING.md`.
+- Code of Conduct: see `CODE_OF_CONDUCT.md`.
+- Security reporting: see `SECURITY.md`.
 
 ### Agent ↔ Server connection (summary)
 - Standalone: full local CLI/TUI, toggle metric sets, `/metrics` always on.

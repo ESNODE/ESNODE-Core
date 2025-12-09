@@ -1,6 +1,7 @@
 // ESNODE | Source Available BUSL-1.1 | Copyright (c) 2024 Estimatedstocks AB
 mod collectors;
 pub mod config;
+mod event_worker;
 mod http;
 pub mod metrics;
 pub mod state;
@@ -103,7 +104,7 @@ impl Agent {
                 .set(1.0);
         }
         if config.enable_gpu {
-            let (collector, warning) = GpuCollector::new(status.clone());
+            let (collector, warning) = GpuCollector::new(status.clone(), &config);
             if let Some(msg) = warning {
                 warn!("{msg}");
                 metrics

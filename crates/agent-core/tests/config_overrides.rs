@@ -13,6 +13,11 @@ fn overrides_apply_all_booleans_and_scalars() {
         enable_network: Some(false),
         enable_gpu: Some(false),
         enable_power: Some(false),
+        enable_gpu_mig: Some(true),
+        enable_gpu_events: Some(true),
+        gpu_visible_devices: Some(Some("GPU-123,1".to_string())),
+        mig_config_devices: Some(Some("GPU-123".to_string())),
+        k8s_mode: Some(true),
         enable_mcp: Some(true),
         enable_app: Some(true),
         enable_rack_thermals: Some(true),
@@ -39,6 +44,11 @@ fn overrides_apply_all_booleans_and_scalars() {
     assert!(!base.enable_network);
     assert!(!base.enable_gpu);
     assert!(!base.enable_power);
+    assert!(base.enable_gpu_mig);
+    assert!(base.enable_gpu_events);
+    assert_eq!(base.gpu_visible_devices.as_deref(), Some("GPU-123,1"));
+    assert_eq!(base.mig_config_devices.as_deref(), Some("GPU-123"));
+    assert!(base.k8s_mode);
     assert!(base.enable_mcp);
     assert!(base.enable_app);
     assert!(base.enable_rack_thermals);

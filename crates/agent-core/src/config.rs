@@ -38,6 +38,16 @@ pub struct AgentConfig {
     pub enable_gpu: bool,
     pub enable_power: bool,
     #[serde(default)]
+    pub enable_gpu_mig: bool,
+    #[serde(default)]
+    pub enable_gpu_events: bool,
+    #[serde(default)]
+    pub gpu_visible_devices: Option<String>,
+    #[serde(default)]
+    pub mig_config_devices: Option<String>,
+    #[serde(default)]
+    pub k8s_mode: bool,
+    #[serde(default)]
     pub enable_mcp: bool,
     #[serde(default)]
     pub enable_app: bool,
@@ -77,6 +87,11 @@ impl Default for AgentConfig {
             enable_network: true,
             enable_gpu: true,
             enable_power: true,
+            enable_gpu_mig: false,
+            enable_gpu_events: false,
+            gpu_visible_devices: None,
+            mig_config_devices: None,
+            k8s_mode: false,
             enable_mcp: false,
             enable_app: false,
             enable_rack_thermals: false,
@@ -106,6 +121,16 @@ pub struct ConfigOverrides {
     pub enable_network: Option<bool>,
     pub enable_gpu: Option<bool>,
     pub enable_power: Option<bool>,
+    #[serde(default)]
+    pub enable_gpu_mig: Option<bool>,
+    #[serde(default)]
+    pub enable_gpu_events: Option<bool>,
+    #[serde(default)]
+    pub gpu_visible_devices: Option<Option<String>>,
+    #[serde(default)]
+    pub mig_config_devices: Option<Option<String>>,
+    #[serde(default)]
+    pub k8s_mode: Option<bool>,
     #[serde(default)]
     pub enable_mcp: Option<bool>,
     #[serde(default)]
@@ -160,6 +185,21 @@ impl AgentConfig {
         }
         if let Some(enable_power) = overrides.enable_power {
             self.enable_power = enable_power;
+        }
+        if let Some(enable_gpu_mig) = overrides.enable_gpu_mig {
+            self.enable_gpu_mig = enable_gpu_mig;
+        }
+        if let Some(enable_gpu_events) = overrides.enable_gpu_events {
+            self.enable_gpu_events = enable_gpu_events;
+        }
+        if let Some(gpu_visible_devices) = overrides.gpu_visible_devices {
+            self.gpu_visible_devices = gpu_visible_devices;
+        }
+        if let Some(mig_config_devices) = overrides.mig_config_devices {
+            self.mig_config_devices = mig_config_devices;
+        }
+        if let Some(k8s_mode) = overrides.k8s_mode {
+            self.k8s_mode = k8s_mode;
         }
         if let Some(enable_mcp) = overrides.enable_mcp {
             self.enable_mcp = enable_mcp;

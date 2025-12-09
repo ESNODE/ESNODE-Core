@@ -85,7 +85,19 @@ pub struct CollectorError {
 
 #[derive(Default, Clone, Serialize, Deserialize)]
 pub struct GpuStatus {
+    #[serde(default)]
+    pub uuid: Option<String>,
     pub gpu: String,
+    #[serde(default)]
+    pub identity: Option<GpuIdentity>,
+    #[serde(default)]
+    pub topo: Option<GpuTopo>,
+    #[serde(default)]
+    pub health: Option<GpuHealth>,
+    #[serde(default)]
+    pub nvlink: Option<NvLinkState>,
+    #[serde(default)]
+    pub mig_tree: Option<MigTree>,
     pub temperature_celsius: Option<f64>,
     pub power_watts: Option<f64>,
     pub util_percent: Option<f64>,
@@ -96,6 +108,143 @@ pub struct GpuStatus {
     pub clock_mem_mhz: Option<f64>,
     pub thermal_throttle: bool,
     pub power_throttle: bool,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct GpuIdentity {
+    #[serde(default)]
+    pub pci_bus_id: Option<String>,
+    #[serde(default)]
+    pub pci_domain: Option<u32>,
+    #[serde(default)]
+    pub pci_bus: Option<u32>,
+    #[serde(default)]
+    pub pci_device: Option<u32>,
+    #[serde(default)]
+    pub pci_function: Option<u32>,
+    #[serde(default)]
+    pub pci_gen: Option<u32>,
+    #[serde(default)]
+    pub pci_link_width: Option<u32>,
+    #[serde(default)]
+    pub driver_version: Option<String>,
+    #[serde(default)]
+    pub nvml_version: Option<String>,
+    #[serde(default)]
+    pub cuda_driver_version: Option<i32>,
+    #[serde(default)]
+    pub device_id: Option<u32>,
+    #[serde(default)]
+    pub subsystem_id: Option<u32>,
+    #[serde(default)]
+    pub board_id: Option<u32>,
+    #[serde(default)]
+    pub numa_node: Option<i32>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct GpuTopo {
+    #[serde(default)]
+    pub pci_link_gen: Option<u32>,
+    #[serde(default)]
+    pub pci_link_width: Option<u32>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct GpuHealth {
+    #[serde(default)]
+    pub pstate: Option<u32>,
+    #[serde(default)]
+    pub power_cap_reason: Option<String>,
+    #[serde(default)]
+    pub throttle_reasons: Vec<String>,
+    #[serde(default)]
+    pub ecc_mode: Option<String>,
+    #[serde(default)]
+    pub retired_pages: Option<u64>,
+    #[serde(default)]
+    pub last_xid: Option<i32>,
+    #[serde(default)]
+    pub encoder_util_percent: Option<f64>,
+    #[serde(default)]
+    pub decoder_util_percent: Option<f64>,
+    #[serde(default)]
+    pub copy_util_percent: Option<f64>,
+    #[serde(default)]
+    pub bar1_total_bytes: Option<u64>,
+    #[serde(default)]
+    pub bar1_used_bytes: Option<u64>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct MigDeviceStatus {
+    pub id: String,
+    #[serde(default)]
+    pub uuid: Option<String>,
+    #[serde(default)]
+    pub memory_total_bytes: Option<u64>,
+    #[serde(default)]
+    pub memory_used_bytes: Option<u64>,
+    #[serde(default)]
+    pub util_percent: Option<u32>,
+    #[serde(default)]
+    pub sm_count: Option<u32>,
+    #[serde(default)]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub placement: Option<String>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct MigTree {
+    #[serde(default)]
+    pub supported: bool,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub gpu_instances: Vec<GpuInstanceNode>,
+    #[serde(default)]
+    pub compute_instances: Vec<ComputeInstanceNode>,
+    #[serde(default)]
+    pub devices: Vec<MigDeviceStatus>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct GpuInstanceNode {
+    pub id: u32,
+    #[serde(default)]
+    pub profile_id: Option<u32>,
+    #[serde(default)]
+    pub placement: Option<String>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct ComputeInstanceNode {
+    pub gpu_instance_id: u32,
+    pub id: u32,
+    #[serde(default)]
+    pub profile_id: Option<u32>,
+    #[serde(default)]
+    pub eng_profile_id: Option<u32>,
+    #[serde(default)]
+    pub placement: Option<String>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct NvLinkState {
+    #[serde(default)]
+    pub links: Vec<NvLinkStats>,
+}
+
+#[derive(Default, Clone, Serialize, Deserialize)]
+pub struct NvLinkStats {
+    pub link: u32,
+    #[serde(default)]
+    pub rx_bytes: Option<u64>,
+    #[serde(default)]
+    pub tx_bytes: Option<u64>,
+    #[serde(default)]
+    pub errors: Option<u64>,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]

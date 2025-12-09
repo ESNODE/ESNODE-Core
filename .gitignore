@@ -34,3 +34,5 @@ Cargo.lock
 # Logs and temp outputs
 *.log
 /tmp/
+external_gpu_reference.md
+/external_sources

@@ -54,6 +54,26 @@ struct Cli {
     #[arg(long, env = "ESNODE_ENABLE_GPU")]
     enable_gpu: Option<bool>,
 
+    /// Enable or disable MIG telemetry (requires GPU feature; guarded).
+    #[arg(long, env = "ESNODE_ENABLE_GPU_MIG")]
+    enable_gpu_mig: Option<bool>,
+
+    /// Enable or disable GPU event polling (XID/ECC/retire/throttle).
+    #[arg(long, env = "ESNODE_ENABLE_GPU_EVENTS")]
+    enable_gpu_events: Option<bool>,
+
+    /// Optional filter for visible GPUs (UUIDs or indices, comma separated).
+    #[arg(long, env = "ESNODE_GPU_VISIBLE_DEVICES")]
+    gpu_visible_devices: Option<String>,
+
+    /// Optional filter for GPUs where MIG can be managed (UUIDs or indices).
+    #[arg(long, env = "ESNODE_MIG_CONFIG_DEVICES")]
+    mig_config_devices: Option<String>,
+
+    /// Enable Kubernetes-compatible resource/label naming.
+    #[arg(long, env = "ESNODE_K8S_MODE")]
+    k8s_mode: Option<bool>,
+
     /// Enable or disable power collector (CPU/package/hwmon/BMC if available)
     #[arg(long, env = "ESNODE_ENABLE_POWER")]
     enable_power: Option<bool>,
@@ -267,6 +287,11 @@ fn cli_to_overrides(cli: &Cli) -> Result<ConfigOverrides> {
         enable_disk: cli.enable_disk,
         enable_network: cli.enable_network,
         enable_gpu: cli.enable_gpu,
+        enable_gpu_mig: cli.enable_gpu_mig,
+        enable_gpu_events: cli.enable_gpu_events,
+        gpu_visible_devices: cli.gpu_visible_devices.clone().map(Some),
+        mig_config_devices: cli.mig_config_devices.clone().map(Some),
+        k8s_mode: cli.k8s_mode,
         enable_power: cli.enable_power,
         enable_mcp: None,
         enable_app: None,
