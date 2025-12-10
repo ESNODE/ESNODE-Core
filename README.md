@@ -96,6 +96,7 @@ Community & policies:
 - Support & upgrade policy: see `docs/support-policy.md`.
 - Metric label migration (UUID-first): see `docs/migrations.md`.
 - Sponsorship: see `docs/sponsorship.md` (GitHub Sponsors for ESNODE).
+- Containers: see `docs/container.md` for distroless build/run instructions.
 
 ### Agent ↔ Server connection (summary)
 - Standalone: full local CLI/TUI, toggle metric sets, `/metrics` always on.
