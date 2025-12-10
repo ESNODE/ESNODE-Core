@@ -95,6 +95,7 @@ Community & policies:
 - Security reporting: see `SECURITY.md`.
 - Support & upgrade policy: see `docs/support-policy.md`.
 - Metric label migration (UUID-first): see `docs/migrations.md`.
+- Sponsorship: see `docs/sponsorship.md` (GitHub Sponsors for ESNODE).
 
 ### Agent ↔ Server connection (summary)
 - Standalone: full local CLI/TUI, toggle metric sets, `/metrics` always on.
