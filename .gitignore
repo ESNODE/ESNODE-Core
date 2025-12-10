@@ -21,6 +21,7 @@ Cargo.lock
 *.msi
 *.exe
 *.AppImage
+.env*
 
 # Installable bundles and local release dirs
 /dist/

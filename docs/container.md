@@ -35,3 +35,15 @@ docker run --rm --net=host --pid=host ghcr.io/ESNODE/esnode-core:0.1.0
 ```
 
 Adjust mounts/privileges for GPU telemetry (e.g., NVIDIA Container Toolkit) and `/sys` access as needed.
+
+## Registry logins (local/CI)
+- GitHub Container Registry (ghcr.io):
+  - Create a PAT with `write:packages`.
+  - Login locally: `echo "$GHCR_PAT" | docker login ghcr.io -u "$GHCR_USER" --password-stdin`.
+  - In GitHub Actions: store the PAT as a secret (e.g., `CR_PAT`) and login similarly.
+- Docker Hub:
+  - Create an access token.
+  - Login locally: `echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin`.
+  - In CI: store as secrets and login the same way.
+
+See `.env.docker.example` for a template of local env vars (copy to `.env.docker` and fill; do not commit secrets).
