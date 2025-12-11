@@ -2,6 +2,8 @@
 
 # ESNODE-Core
 
+![ESNODE-Core TUI Home Screen](docs/images/esnode-tui-home.png)
+
 This repository contains the source, build tooling, and documentation for the ESNODE-Core Agent. The ESNODE-Pulse controller is maintained separately (licensed) and is not part of this codebase.
 ## Supported server OS targets (AI infra focused)
 - Ubuntu Server (primary, ~60–70% of AI fleet; best CUDA/driver/toolchain support)
