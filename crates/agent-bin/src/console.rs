@@ -36,6 +36,7 @@ pub enum Screen {
     MetricsProfiles,
     AgentStatus,
     ConnectServer,
+    Orchestrator,
 }
 
 #[derive(Clone, Debug)]
@@ -62,6 +63,7 @@ enum ConnectField {
 struct AppState {
     screen: Screen,
     last_status: Option<StatusSnapshot>,
+    last_orch_metrics: Option<esnode_orchestrator::PubMetrics>,
     message: Option<String>,
     no_color: bool,
     should_exit: bool,
@@ -83,6 +85,7 @@ impl AppState {
         AppState {
             screen: Screen::MainMenu,
             last_status: None,
+            last_orch_metrics: None,
             message: None,
             no_color,
             should_exit: false,
@@ -176,6 +179,10 @@ pub fn run_console(
                             state.set_screen(Screen::ConnectServer);
                             refresh_now = true;
                         }
+                        KeyCode::Char('8') if state.screen == Screen::MainMenu => {
+                            state.set_screen(Screen::Orchestrator);
+                            refresh_now = true;
+                        }
                         _ => {}
                     }
                     if refresh_now {
@@ -209,6 +216,12 @@ fn refresh_status(state: &mut AppState, client: &AgentClient) {
             state.set_status(None);
         }
     }
+    // Also fetch orchestrator metrics (best effort)
+    if let Ok(orch) = client.fetch_orchestrator_metrics() {
+        state.last_orch_metrics = Some(orch);
+    } else {
+        state.last_orch_metrics = None;
+    }
 }
 
 fn prepare_terminal() -> Result<Stdout> {
@@ -241,6 +254,7 @@ fn render(frame: &mut ratatui::Frame, state: &AppState) {
         Screen::MetricsProfiles => render_metric_profiles(frame, area, state),
         Screen::AgentStatus => render_agent_status(frame, area, state),
         Screen::ConnectServer => render_connect_server(frame, area, state),
+        Screen::Orchestrator => render_orchestrator(frame, area, state),
     }
 }
 
@@ -277,8 +291,9 @@ fn render_main_menu(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
         Line::from("     3. Network & Disk           (I/O, bandwidth, latency)"),
         Line::from("     4. Efficiency & MCP Signals (tokens-per-watt, routing scores)"),
         Line::from("     5. Metrics Profiles         (enable/disable metric sets)"),
-        Line::from("     6. Agent Status & Logs      (health, errors, config)"),
+        Line::from("     6. AgentStatus & Logs      (health, errors, config)"),
         Line::from("     7. Connect to ESNODE-Pulse (attach this ESNODE to a cluster)"),
+        Line::from("     8. ESNODE Orchestrator      (Autonomous features, tasks, devices)"),
         Line::from(""),
         Line::from("     Selection . . . . . . . . . . . . . . . . . .  __"),
         Line::from(""),
@@ -754,6 +769,65 @@ fn render_connect_server(frame: &mut ratatui::Frame, area: Rect, state: &AppStat
     frame.set_cursor(cursor_col, cursor_row);
 }
 
+fn render_orchestrator(frame: &mut ratatui::Frame, area: Rect, state: &AppState) {
+    if state.last_orch_metrics.is_none() {
+        render_placeholder(
+            frame,
+            area,
+            state,
+            "Orchestrator disabled or unreachable (Enable with --enable-orchestrator)",
+        );
+        return;
+    }
+    let metrics = state.last_orch_metrics.as_ref().unwrap();
+    let mut lines = vec![
+        Line::from("                       ESNODE – ORCHESTRATOR STATUS                     N01"),
+        Line::from(""),
+        Line::from("   Status:"),
+        Line::from("     Active . . . . . . . . . . . . . . . . . . . . . :  YES"),
+        Line::from(format!(
+            "     Managed Devices  . . . . . . . . . . . . . . . . :  {}",
+            metrics.device_count
+        )),
+        Line::from(format!(
+            "     Pending Tasks  . . . . . . . . . . . . . . . . . :  {}",
+            metrics.pending_tasks
+        )),
+        Line::from(""),
+        Line::from("   Devices:"),
+    ];
+
+    if metrics.devices.is_empty() {
+        lines.push(Line::from("     (no devices registered)"));
+    } else {
+        for (i, dev) in metrics.devices.iter().enumerate() {
+            lines.push(Line::from(format!(
+                "     {}. {} (Mem: {:.1} GB, Load: {:.1}%)",
+                i + 1,
+                dev.id,
+                dev.mem_gb,
+                dev.current_load * 100.0
+            )));
+        }
+    }
+
+    lines.extend_from_slice(&[
+        Line::from(""),
+        Line::from(""),
+        Line::from(" F3=Exit   F5=Refresh   F12=Back"),
+    ]);
+
+    let mut block = Block::default().borders(Borders::ALL);
+    if !state.no_color {
+        block = block.border_style(primary_style(state));
+    }
+    let paragraph = Paragraph::new(lines)
+        .style(primary_style(state))
+        .block(block)
+        .wrap(Wrap { trim: false });
+    frame.render_widget(paragraph, area);
+}
+
 fn handle_key(code: KeyCode, state: &mut AppState) -> bool {
     if let AgentMode::Managed(_) = state.mode {
         if state.screen != Screen::ConnectServer {
@@ -1108,6 +1182,8 @@ mod tests {
             net_rx_bytes_per_sec: Some(10_000.0),
             net_tx_bytes_per_sec: Some(5_000.0),
             net_drops_per_sec: Some(0.1),
+            app_tokens_per_sec: None,
+            app_tokens_per_watt: None,
         }
     }
 
@@ -1575,6 +1651,18 @@ impl NodeSummary {
                     summary.node_power = format!("~{:.1} W", v);
                 }
             }
+
+            if let Some(_tps) = status.app_tokens_per_sec {
+                // We don't have a field for raw tokens/sec in NodeSummary yet, 
+                // but we use it for efficiency.
+                if let Some(tpw) = status.app_tokens_per_watt {
+                    summary.tokens_per_watt = format!("{:.2}", tpw);
+                    // Approximate Joule calc (Watts * 1s = Joules for that second)
+                    // So Tokens/Joule is essentially same as Tokens/Watt if considering rate per second.
+                    summary.tokens_per_joule = format!("{:.2}", tpw); 
+                }
+            }
+
             if !status.cpu_temperatures.is_empty() {
                 let mut inlet = None;
                 let mut exhaust = None;

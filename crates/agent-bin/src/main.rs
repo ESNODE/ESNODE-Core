@@ -114,6 +114,18 @@ struct Cli {
     #[arg(long, env = "ESNODE_MANAGED_NODE_ID")]
     managed_node_id: Option<String>,
 
+    /// Enable ESNODE-Orchestrator (Autonomous features)
+    #[arg(long, env = "ESNODE_ENABLE_ORCHESTRATOR")]
+    pub enable_orchestrator: Option<bool>,
+
+    /// Enable App/Model Awareness collector
+    #[arg(long, env = "ESNODE_ENABLE_APP")]
+    pub enable_app: Option<bool>,
+
+    /// URL for application metrics (e.g. http://localhost:8000/metrics)
+    #[arg(long, env = "ESNODE_APP_METRICS_URL")]
+    pub app_metrics_url: Option<String>,
+
     /// Log level (error, warn, info, debug, trace)
     #[arg(long, env = "ESNODE_LOG_LEVEL")]
     log_level: Option<String>,
@@ -283,6 +295,15 @@ fn load_config_file(path: &Path) -> Result<ConfigOverrides> {
 }
 
 fn cli_to_overrides(cli: &Cli) -> Result<ConfigOverrides> {
+    let orchestrator = if cli.enable_orchestrator.unwrap_or(false) {
+        Some(esnode_orchestrator::OrchestratorConfig {
+            enabled: true,
+            ..Default::default()
+        })
+    } else {
+        None
+    };
+
     Ok(ConfigOverrides {
         listen_address: cli.listen_address.clone(),
         scrape_interval: parse_duration(cli.scrape_interval.as_deref())?,
@@ -299,7 +320,8 @@ fn cli_to_overrides(cli: &Cli) -> Result<ConfigOverrides> {
         k8s_mode: cli.k8s_mode,
         enable_power: cli.enable_power,
         enable_mcp: None,
-        enable_app: None,
+        enable_app: cli.enable_app,
+        app_metrics_url: cli.app_metrics_url.clone(),
         enable_rack_thermals: None,
         managed_server: cli.managed_server.clone().map(Some),
         managed_cluster_id: cli.managed_cluster_id.clone().map(Some),
@@ -312,6 +334,7 @@ fn cli_to_overrides(cli: &Cli) -> Result<ConfigOverrides> {
         local_tsdb_retention_hours: cli.local_tsdb_retention_hours,
         local_tsdb_max_disk_mb: cli.local_tsdb_max_disk_mb,
         log_level: parse_log_level(cli.log_level.as_deref())?,
+        orchestrator,
     })
 }
 

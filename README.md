@@ -56,6 +56,7 @@ ESNODE-Core is a GPU-aware host metrics exporter for Linux nodes. It exposes CPU
 
 ## Components
 - `esnode-core`: per-node collector exposing Prometheus `/metrics`, JSON `/status` (`/v1/status`), and SSE `/events`.
+- `esnode-orchestrator`: optional autonomous resource manager (embedded lib, CLI-configurable).
 - `esnode-pulse`: licensed controller that polls agents and centralizes policy/alerts (not included in this repository).
 
 See `docs/architecture.md` and `docs/platform-matrix.md` for topology and build targets.
@@ -65,6 +66,7 @@ See `docs/architecture.md` and `docs/platform-matrix.md` for topology and build 
 cargo build --workspace --release
 ./target/release/esnode-core
 ```
+- Cross-compiling on macOS for `x86_64-unknown-linux-gnu`/`aarch64-unknown-linux-gnu` requires the corresponding GNU toolchains (e.g., `brew install x86_64-unknown-linux-gnu`).
 
 Configuration precedence: CLI flags > env vars > `esnode.toml` > defaults. See `docs/quickstart.md` for full examples.
 - Config flags of interest:

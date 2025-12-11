@@ -45,6 +45,28 @@ impl AgentClient {
             .context("reading /metrics body")?;
         Ok(body)
     }
+
+    pub fn fetch_orchestrator_metrics(&self) -> Result<esnode_orchestrator::PubMetrics> {
+        let url = format!("{}/orchestrator/metrics", self.base_url);
+        let resp = ureq::get(&url).call();
+        match resp {
+            Ok(r) => {
+                let body = r.into_string().context("reading /orchestrator/metrics body")?;
+                let metrics: esnode_orchestrator::PubMetrics =
+                    serde_json::from_str(&body).context("parsing orchestrator metrics")?;
+                Ok(metrics)
+            },
+            Err(ureq::Error::Status(404, _)) => {
+                // If 404, it means orchestrator is disabled. Return default/empty.
+                Ok(esnode_orchestrator::PubMetrics {
+                    device_count: 0,
+                    pending_tasks: 0,
+                    devices: vec![],
+                })
+            }
+            Err(e) => Err(anyhow::anyhow!("request failed: {}", e)),
+        }
+    }
 }
 
 #[cfg(test)]

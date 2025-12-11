@@ -329,8 +329,8 @@ impl Collector for GpuCollector {
                     let gen = device.current_pcie_link_gen().ok();
                     let width = device.current_pcie_link_width().ok();
                     Some(GpuTopo {
-                        pci_link_gen: gen.map(|g| g as u32),
-                        pci_link_width: width.map(|w| w as u32),
+                        pci_link_gen: gen,
+                        pci_link_width: width,
                     })
                 };
                 let mut health = GpuHealth::default();
@@ -876,7 +876,7 @@ impl Collector for GpuCollector {
                                     .set(1.0);
                             }
                             for mig in &migs.devices {
-                                let mig_label = mig.uuid.as_deref().unwrap_or(mig.id.as_str());
+                                let mig_label = mig.uuid.as_deref().unwrap_or(mig.id.to_string().as_str());
                                 let compat_label = if self.k8s_mode {
                                     k8s_resource_name(
                                         self.resource_prefix,

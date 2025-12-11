@@ -19,6 +19,7 @@ gpu-nvml-ffi-ext = ["gpu-nvml-ffi"]
 [dependencies]
 anyhow = "1"
 async-trait = "0.1"
+ureq = { version = "2.9", features = ["json"] }
 axum = "0.7"
 prometheus = "0.13"
 serde = { version = "1", features = ["derive"] }
@@ -41,3 +42,6 @@ optional = true
 [dependencies.nvml-wrapper-sys]
 version = "0.7"
 optional = true
+
+[dependencies.esnode-orchestrator]
+path = "../../ESNODE-Orchestrator"

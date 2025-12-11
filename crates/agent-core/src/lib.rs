@@ -16,7 +16,8 @@ use std::time::Instant;
 use anyhow::Context;
 use collectors::{
     cpu::CpuCollector, disk::DiskCollector, gpu::GpuCollector, memory::MemoryCollector,
-    network::NetworkCollector, numa::NumaCollector, power::PowerCollector, Collector,
+    network::NetworkCollector, numa::NumaCollector, power::PowerCollector, app::AppCollector,
+    Collector,
 };
 pub use config::{AgentConfig, ConfigOverrides, LogLevel};
 use http::{build_router, serve, HttpState};
@@ -140,6 +141,22 @@ impl Agent {
                 .with_label_values(&["power"])
                 .set(1.0);
         }
+        if config.enable_app {
+            info!("App collector enabled (url={})", config.app_metrics_url);
+            metrics
+                .agent_collector_disabled
+                .with_label_values(&["app"])
+                .set(0.0);
+            collectors.push(Box::new(AppCollector::new(
+                status.clone(),
+                config.app_metrics_url.clone(),
+            )));
+        } else {
+            metrics
+                .agent_collector_disabled
+                .with_label_values(&["app"])
+                .set(1.0);
+        }
         let local_tsdb = if config.enable_local_tsdb {
             info!(
                 "Local TSDB enabled (path={}, retention={}h, max_disk={} MB)",
@@ -248,12 +265,38 @@ impl Agent {
             }
         });
 
-        let router = build_router(HttpState {
+        // Initialize Orchestrator
+        let orchestrator_state = if let Some(orch_config) = &config.orchestrator {
+            if orch_config.enabled {
+                info!("Initializing ESNODE-Orchestrator...");
+                let devices = vec![]; // TODO: Populate from collectors?
+                let orchestrator = esnode_orchestrator::Orchestrator::new(devices, orch_config.clone());
+                let state = esnode_orchestrator::AppState {
+                    orchestrator: std::sync::Arc::new(std::sync::RwLock::new(orchestrator)),
+                };
+                
+                // Spawn the tick loop
+                let loop_state = state.clone();
+                tokio::spawn(async move {
+                    esnode_orchestrator::run_loop(loop_state).await;
+                });
+                
+                Some(state)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let http_state = HttpState {
             metrics: metrics.clone(),
             healthy: healthy.clone(),
             status: status.clone(),
             tsdb: local_tsdb.clone(),
-        });
+            orchestrator: orchestrator_state,
+        };
+        let router = build_router(http_state);
         let http_task = serve(&config.listen_address, router)
             .await
             .context("starting HTTP server")?;

@@ -131,6 +131,7 @@ pub struct MetricsRegistry {
     pub ai_carbon_grams_per_token: GaugeVec,
     pub agent_config_reloads_total: IntCounter,
     pub agent_collector_disabled: GaugeVec,
+    pub app_tokens_per_sec: Gauge,
 }
 
 impl MetricsRegistry {
@@ -861,6 +862,10 @@ impl MetricsRegistry {
             ),
             &["collector"],
         )?;
+        let app_tokens_per_sec = Gauge::with_opts(Opts::new(
+            "esnode_app_tokens_per_sec",
+            "Application token generation rate (tokens/sec)",
+        ))?;
 
         let metrics = MetricsRegistry {
             registry,
@@ -982,6 +987,7 @@ impl MetricsRegistry {
             ai_carbon_grams_per_token,
             agent_config_reloads_total,
             agent_collector_disabled,
+            app_tokens_per_sec,
         };
 
         metrics.register_all()?;
@@ -1108,6 +1114,7 @@ impl MetricsRegistry {
             Box::new(self.ai_carbon_grams_per_token.clone()),
             Box::new(self.agent_config_reloads_total.clone()),
             Box::new(self.agent_collector_disabled.clone()),
+            Box::new(self.app_tokens_per_sec.clone()),
         ];
 
         for collector in regs.drain(..) {

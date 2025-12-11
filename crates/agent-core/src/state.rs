@@ -62,6 +62,10 @@ pub struct StatusSnapshot {
     pub net_tx_bytes_per_sec: Option<f64>,
     #[serde(default)]
     pub net_drops_per_sec: Option<f64>,
+    #[serde(default)]
+    pub app_tokens_per_sec: Option<f64>,
+    #[serde(default)]
+    pub app_tokens_per_watt: Option<f64>,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -275,32 +279,22 @@ pub struct FabricLink {
     pub errors: Option<u64>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub enum FabricLinkType {
     NvLink,
     InfinityFabric,
     XeLink,
+    #[default]
     Pcie,
 }
 
-impl Default for FabricLinkType {
-    fn default() -> Self {
-        FabricLinkType::Pcie
-    }
-}
-
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub enum GpuVendor {
     Nvidia,
     Amd,
     Intel,
+    #[default]
     Unknown,
-}
-
-impl Default for GpuVendor {
-    fn default() -> Self {
-        GpuVendor::Unknown
-    }
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -321,6 +315,7 @@ pub struct HostMetrics {
     pub net_rx_bytes_per_sec: Option<f64>,
     pub net_tx_bytes_per_sec: Option<f64>,
     pub net_drops_per_sec: Option<f64>,
+    pub app_tokens_per_sec: Option<f64>,
 }
 
 impl StatusState {
@@ -335,6 +330,12 @@ impl StatusState {
             last_errors: Arc::new(RwLock::new(VecDeque::new())),
             last_scrape_unix_ms: Arc::new(AtomicU64::new(0)),
             host: Arc::new(RwLock::new(HostMetrics::default())),
+        }
+    }
+
+    pub fn set_app_metrics(&self, tokens_per_sec: f64) {
+        if let Ok(mut guard) = self.host.write() {
+            guard.app_tokens_per_sec = Some(tokens_per_sec);
         }
     }
 
@@ -388,6 +389,22 @@ impl StatusState {
             net_rx_bytes_per_sec: host.net_rx_bytes_per_sec,
             net_tx_bytes_per_sec: host.net_tx_bytes_per_sec,
             net_drops_per_sec: host.net_drops_per_sec,
+            app_tokens_per_sec: host.app_tokens_per_sec,
+            app_tokens_per_watt: {
+                if let (Some(tokens), Some(microwatts)) = (
+                    host.app_tokens_per_sec,
+                    Some(self.node_power_microwatts.load(Ordering::Relaxed)),
+                ) {
+                    if microwatts > 0 {
+                        let watts = microwatts as f64 / 1_000_000.0;
+                        Some(tokens / watts)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            },
         }
     }
 

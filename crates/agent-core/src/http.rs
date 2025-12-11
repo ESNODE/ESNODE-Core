@@ -23,17 +23,23 @@ pub struct HttpState {
     pub healthy: Arc<std::sync::atomic::AtomicBool>,
     pub status: StatusState,
     pub tsdb: Option<std::sync::Arc<crate::tsdb::LocalTsdb>>,
+    pub orchestrator: Option<esnode_orchestrator::AppState>,
 }
 
 pub fn build_router(state: HttpState) -> Router {
-    Router::new()
+    let mut router = Router::new()
         .route("/metrics", get(metrics_handler))
         .route("/healthz", get(health_handler))
         .route("/status", get(status_handler))
         .route("/v1/status", get(status_handler))
         .route("/events", get(events_handler))
-        .route("/tsdb/export", get(tsdb_export_handler))
-        .with_state(state)
+        .route("/tsdb/export", get(tsdb_export_handler));
+
+    if let Some(orch_state) = &state.orchestrator {
+        router = router.nest_service("/orchestrator", esnode_orchestrator::routes(orch_state.clone()));
+    }
+
+    router.with_state(state)
 }
 
 pub async fn serve(addr: &str, router: Router) -> anyhow::Result<JoinHandle<anyhow::Result<()>>> {

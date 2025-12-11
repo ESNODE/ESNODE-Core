@@ -123,6 +123,16 @@ log_level = "info"
 # managed_cluster_id = "CLU-XXXX"
 # managed_node_id = "gpu-node-01"
 # managed_join_token = "ABC123"
+
+[orchestrator]
+enabled = false                # Master toggle for orchestration
+enable_zombie_reaper = true    # Kill zombie processes
+enable_turbo_mode = false      # Latency optimization
+enable_bin_packing = false     # Task scheduling
+enable_flash_preemption = false# Priority preemption
+enable_dataset_prefetch = false# Storage prefetching
+enable_bandwidth_reserve = false# Network QoS
+enable_fs_cleanup = false      # Disk cleanup
 ```
 
 Run ESNODE-Core pointing to this config (if needed):
@@ -152,7 +162,9 @@ esnode-core \
   --enable-local-tsdb true \
   --local-tsdb-path "/var/lib/esnode/tsdb" \
   --local-tsdb-retention-hours 48 \
-  --local-tsdb-max-disk-mb 2048
+  --local-tsdb-retention-hours 48 \
+  --local-tsdb-max-disk-mb 2048 \
+  --enable-orchestrator false
 
 Local TSDB:
 - 2h on-disk blocks (`samples.jsonl` + `index.json`) with label hashes and per-metric counts.

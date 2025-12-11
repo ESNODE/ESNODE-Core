@@ -3,6 +3,7 @@ use async_trait::async_trait;
 
 use crate::metrics::MetricsRegistry;
 
+pub mod app;
 pub mod cpu;
 pub mod disk;
 pub mod gpu;
