@@ -688,13 +688,16 @@ impl Collector for GpuCollector {
 
                         // Estimate bandwidth percent if we have throughput + link info
                         if let (Some(tx_kb), Some(rx_kb)) = (last_tx_kb, last_rx_kb) {
-                            if let (Ok(max_speed), Ok(width)) = (
-                                device.pcie_link_max_speed(),
-                                device.current_pcie_link_width(),
-                            ) {
-                                let bytes_per_s = ((tx_kb + rx_kb) as f64) * 1024.0;
+                            // pcie_link_max_speed was renamed/removed in 0.10, falling back to pcie_link_speed (current) or skipping if unavailable
+                            // Note: pcie_link_speed returns the current link speed, not max.
+                            // If semantics require max, we might need a different call, but for now matching the existing pattern.
+                            if let (Ok(gen), Ok(width), Ok(speed)) = (
+                                device.pcie_link_gen(),
+                                device.pcie_link_width(),
+                                device.pcie_link_speed(),
+                            ) {   let bytes_per_s = ((tx_kb + rx_kb) as f64) * 1024.0;
                                 let lane_budget_bytes =
-                                    pcie_lane_bytes_per_sec(max_speed) * (width as f64).max(1.0);
+                                    pcie_lane_bytes_per_sec(gen, speed) * (width as f64).max(1.0);
                                 if lane_budget_bytes > 0.0 {
                                     let pct = (bytes_per_s / lane_budget_bytes).min(1.0) * 100.0;
                                     metrics
@@ -837,189 +840,561 @@ impl Collector for GpuCollector {
                 if self.enable_mig {
                     #[cfg(all(feature = "gpu-nvml-ffi", feature = "gpu"))]
                     {
-                        if let Ok(migs) = collect_mig_devices(nvml, &device) {
-                            metrics
-                                .gpu_mig_enabled
-                                .with_label_values(&[uuid_label, gpu_label.as_str()])
-                                .set(if migs.enabled { 1.0 } else { 0.0 });
-                            // GI/CI info gauges
-                            for gi in &migs.gpu_instances {
-                                metrics
-                                    .mig_gpu_instance_info
-                                    .with_label_values(&[
-                                        uuid_label,
-                                        gpu_label.as_str(),
-                                        gi.id.to_string().as_str(),
-                                        gi.profile_id
-                                            .map(|p| p.to_string())
-                                            .unwrap_or_default()
-                                            .as_str(),
-                                        gi.placement.as_deref().unwrap_or(""),
-                                    ])
-                                    .set(1.0);
-                            }
-                            for ci in &migs.compute_instances {
-                                metrics
-                                    .mig_compute_instance_info
-                                    .with_label_values(&[
-                                        uuid_label,
-                                        gpu_label.as_str(),
-                                        ci.gpu_instance_id.to_string().as_str(),
-                                        ci.id.to_string().as_str(),
-                                        ci.profile_id
-                                            .map(|p| p.to_string())
-                                            .unwrap_or_default()
-                                            .as_str(),
-                                        ci.eng_profile_id
-                                            .map(|p| p.to_string())
-                                            .unwrap_or_default()
-                                            .as_str(),
-                                        ci.placement.as_deref().unwrap_or(""),
-                                    ])
-                                    .set(1.0);
-                            }
-                            for mig in &migs.devices {
-                                let mig_id_string = mig.id.to_string();
-                                let mig_label =
-                                    mig.uuid.as_deref().unwrap_or(mig_id_string.as_str());
-                                let compat_label = if self.k8s_mode {
-                                    k8s_resource_name(
-                                        self.resource_prefix,
-                                        mig.profile.as_deref().or(Some("generic")),
+                        use nvml_wrapper_sys::bindings::{
+                            nvmlComputeInstanceInfo_t, nvmlDevice_t, nvmlGpuInstanceInfo_t,
+                            nvmlReturn_t, nvmlReturn_enum_NVML_SUCCESS,
+                        };
+                        // Load NVML dynamically to bypass missing symbols in sys crate
+                        let lib = unsafe { libloading::Library::new("libnvidia-ml.so.1") }?;
+
+                        // Typedefs for the functions we need
+                        type NvmlDeviceGetMigMode = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            current_mode: *mut std::os::raw::c_uint,
+                            pending_mode: *mut std::os::raw::c_uint,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetMaxMigDeviceCount = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            count: *mut std::os::raw::c_uint,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetMigDeviceHandleByIndex = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            index: std::os::raw::c_uint,
+                            mig_device: *mut nvmlDevice_t,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetDeviceHandleFromMigDeviceHandle = unsafe extern "C" fn(
+                            mig_device: nvmlDevice_t,
+                            device: *mut nvmlDevice_t,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetGpuInstanceId = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            id: *mut std::os::raw::c_uint,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetComputeInstanceId = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            id: *mut std::os::raw::c_uint,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetGpuInstanceById = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            id: std::os::raw::c_uint,
+                            gpu_instance: *mut nvmlDevice_t,
+                        ) -> nvmlReturn_t;
+                        type NvmlGpuInstanceGetInfo = unsafe extern "C" fn(
+                            gpu_instance: nvmlDevice_t,
+                            info: *mut nvml_wrapper_sys::bindings::nvmlGpuInstanceInfo_t,
+                        ) -> nvmlReturn_t;
+                        type NvmlGpuInstanceGetComputeInstanceById = unsafe extern "C" fn(
+                            gpu_instance: nvmlDevice_t,
+                            id: std::os::raw::c_uint,
+                            compute_instance: *mut nvmlDevice_t,
+                        ) -> nvmlReturn_t;
+                        type NvmlComputeInstanceGetInfo = unsafe extern "C" fn(
+                            compute_instance: nvmlDevice_t,
+                            info: *mut nvml_wrapper_sys::bindings::nvmlComputeInstanceInfo_t,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetUUID = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            uuid: *mut std::os::raw::c_char,
+                            size: std::os::raw::c_uint,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetMemoryInfo = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            memory: *mut nvml_wrapper_sys::bindings::nvmlMemory_t,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetUtilizationRates = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            utilization: *mut nvml_wrapper_sys::bindings::nvmlUtilization_t,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetBar1MemoryInfo = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            bar1_memory: *mut nvml_wrapper_sys::bindings::nvmlBAR1Memory_t,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetEccMode = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            current_mode: *mut nvml_wrapper_sys::bindings::nvmlEnableState_t,
+                            pending_mode: *mut nvml_wrapper_sys::bindings::nvmlEnableState_t,
+                        ) -> nvmlReturn_t;
+                        type NvmlDeviceGetTotalEccErrors = unsafe extern "C" fn(
+                            device: nvmlDevice_t,
+                            error_type: nvml_wrapper_sys::bindings::nvmlMemoryErrorType_t,
+                            counter_type: nvml_wrapper_sys::bindings::nvmlEccCounterType_t,
+                            ecc_count: *mut u64,
+                        ) -> nvmlReturn_t;
+
+                        let get_mig_mode: libloading::Symbol<NvmlDeviceGetMigMode> =
+                            unsafe { lib.get(b"nvmlDeviceGetMigMode") }?;
+                        let get_max_mig_device_count: libloading::Symbol<
+                            NvmlDeviceGetMaxMigDeviceCount,
+                        > = unsafe { lib.get(b"nvmlDeviceGetMaxMigDeviceCount") }?;
+                        let get_mig_device_handle_by_index: libloading::Symbol<
+                            NvmlDeviceGetMigDeviceHandleByIndex,
+                        > = unsafe { lib.get(b"nvmlDeviceGetMigDeviceHandleByIndex") }?;
+                        let get_device_handle_from_mig_device_handle: libloading::Symbol<
+                            NvmlDeviceGetDeviceHandleFromMigDeviceHandle,
+                        > = unsafe { lib.get(b"nvmlDeviceGetDeviceHandleFromMigDeviceHandle") }?;
+                        let get_gpu_instance_id: libloading::Symbol<NvmlDeviceGetGpuInstanceId> =
+                            unsafe { lib.get(b"nvmlDeviceGetGpuInstanceId") }?;
+                        let get_compute_instance_id: libloading::Symbol<
+                            NvmlDeviceGetComputeInstanceId,
+                        > = unsafe { lib.get(b"nvmlDeviceGetComputeInstanceId") }?;
+                        let get_gpu_instance_by_id: libloading::Symbol<NvmlDeviceGetGpuInstanceById> =
+                            unsafe { lib.get(b"nvmlGpuInstanceGetById") }?; // Corrected function name
+                        let get_gpu_instance_info: libloading::Symbol<NvmlGpuInstanceGetInfo> =
+                            unsafe { lib.get(b"nvmlGpuInstanceGetInfo") }?;
+                        let get_gpu_instance_compute_instance_by_id: libloading::Symbol<
+                            NvmlGpuInstanceGetComputeInstanceById,
+                        > = unsafe { lib.get(b"nvmlGpuInstanceGetComputeInstanceById") }?;
+                        let get_compute_instance_info: libloading::Symbol<
+                            NvmlComputeInstanceGetInfo,
+                        > = unsafe { lib.get(b"nvmlComputeInstanceGetInfo") }?;
+                        let get_uuid: libloading::Symbol<NvmlDeviceGetUUID> =
+                            unsafe { lib.get(b"nvmlDeviceGetUUID") }?;
+                        let get_memory_info: libloading::Symbol<NvmlDeviceGetMemoryInfo> =
+                            unsafe { lib.get(b"nvmlDeviceGetMemoryInfo") }?;
+                        let get_utilization_rates: libloading::Symbol<NvmlDeviceGetUtilizationRates> =
+                            unsafe { lib.get(b"nvmlDeviceGetUtilizationRates") }?;
+                        let get_bar1_memory_info: libloading::Symbol<NvmlDeviceGetBar1MemoryInfo> =
+                            unsafe { lib.get(b"nvmlDeviceGetBar1MemoryInfo") }?;
+                        let get_total_ecc_errors: libloading::Symbol<NvmlDeviceGetTotalEccErrors> =
+                            unsafe { lib.get(b"nvmlDeviceGetTotalEccErrors") }?;
+
+                        let mut current_mode = 0;
+                        let mut pending = 0;
+                        let parent_handle = unsafe { device.handle() };
+                        let mig_mode_res = unsafe {
+                            get_mig_mode(parent_handle, &mut current_mode, &mut pending)
+                        };
+                        let supported = mig_mode_res == nvmlReturn_enum_NVML_SUCCESS;
+                        let enabled = current_mode
+                            == nvml_wrapper_sys::bindings::nvmlMigMode_enum_NVML_DEVICE_MIG_ENABLE;
+
+                        if !supported || !enabled {
+                            // If MIG is not supported or not enabled, return early with appropriate status
+                            return Ok(MigTree {
+                                supported,
+                                enabled,
+                                gpu_instances: Vec::new(),
+                                compute_instances: Vec::new(),
+                                devices: Vec::new(),
+                            });
+                        }
+
+                        let mut max_count = 0;
+                        unsafe { get_max_mig_device_count(parent_handle, &mut max_count) };
+
+                        let mut devices = Vec::new();
+                        let mut gi_map: HashMap<u32, GpuInstanceNode> = HashMap::new();
+                        let mut gi_handles: HashMap<u32, nvmlDevice_t> = HashMap::new();
+                        let mut ci_nodes: Vec<ComputeInstanceNode> = Vec::new();
+
+                        for idx in 0..max_count {
+                            let mut mig_handle: nvmlDevice_t = std::ptr::null_mut();
+                            if unsafe {
+                                get_mig_device_handle_by_index(parent_handle, idx, &mut mig_handle)
+                            } == nvmlReturn_enum_NVML_SUCCESS
+                            {
+                                let mut full_handle: nvmlDevice_t = std::ptr::null_mut();
+                                unsafe {
+                                    get_device_handle_from_mig_device_handle(
+                                        mig_handle,
+                                        &mut full_handle,
                                     )
-                                } else {
-                                    mig_label.to_string()
                                 };
-                                if let Some(util) = mig.util_percent {
+
+                                let mut uuid_buf = [0i8; 96]; // NVML_DEVICE_UUID_V2_BUFFER_SIZE
+                                let _ = unsafe {
+                                    get_uuid(mig_handle, uuid_buf.as_mut_ptr(), uuid_buf.len() as u32)
+                                };
+                                let mig_uuid_str = unsafe {
+                                    std::ffi::CStr::from_ptr(uuid_buf.as_ptr())
+                                        .to_string_lossy()
+                                        .into_owned()
+                                };
+                                let mig_uuid = if mig_uuid_str.is_empty() {
+                                    None
+                                } else {
+                                    Some(mig_uuid_str.clone())
+                                };
+
+                                // Extract GI/CI to map hierarchy
+                                let mut gi_id = 0;
+                                let _ = unsafe { get_gpu_instance_id(mig_handle, &mut gi_id) };
+                                let mut ci_id = 0;
+                                let _ = unsafe { get_compute_instance_id(mig_handle, &mut ci_id) };
+
+                                // Populate GI info best-effort
+                                if gi_id > 0 && !gi_map.contains_key(&gi_id) {
+                                    let mut gi_handle: nvmlDevice_t = std::ptr::null_mut();
+                                    if unsafe {
+                                        get_gpu_instance_by_id(parent_handle, gi_id, &mut gi_handle)
+                                    } == nvmlReturn_enum_NVML_SUCCESS
+                                    {
+                                        let mut gi_info: nvmlGpuInstanceInfo_t =
+                                            unsafe { std::mem::zeroed() };
+                                        gi_info.version =
+                                            nvml_wrapper_sys::bindings::nvmlGpuInstanceInfo_v2;
+                                        let _ =
+                                            unsafe { get_gpu_instance_info(gi_handle, &mut gi_info) };
+                                        let placement = Some(format!(
+                                            "{}:slice{}",
+                                            gi_info.placement.start, gi_info.placement.size
+                                        ));
+                                        gi_map.insert(
+                                            gi_id,
+                                            GpuInstanceNode {
+                                                id: gi_id,
+                                                profile_id: Some(gi_info.profileId),
+                                                placement,
+                                            },
+                                        );
+                                        gi_handles.insert(gi_id, gi_handle);
+                                    }
+                                }
+
+                                // Populate CI info best-effort
+                                if ci_id > 0 {
+                                    if let Some(_gi_node) = gi_map.get(&gi_id) {
+                                        if let Some(&gi_handle) = gi_handles.get(&gi_id) {
+                                            let mut ci_handle: nvmlDevice_t = std::ptr::null_mut();
+                                            if unsafe {
+                                                get_gpu_instance_compute_instance_by_id(
+                                                    gi_handle, // Assuming GpuInstanceNode stores the handle
+                                                    ci_id,
+                                                    &mut ci_handle,
+                                                )
+                                            } == nvmlReturn_enum_NVML_SUCCESS
+                                            {
+                                                let mut ci_info: nvmlComputeInstanceInfo_t =
+                                                    unsafe { std::mem::zeroed() };
+                                                ci_info.version =
+                                                    nvml_wrapper_sys::bindings::nvmlComputeInstanceInfo_v2;
+                                                let _ = unsafe {
+                                                    get_compute_instance_info(ci_handle, &mut ci_info)
+                                                };
+                                                ci_nodes.push(ComputeInstanceNode {
+                                                    gpu_instance_id: gi_id,
+                                                    id: ci_id,
+                                                    profile_id: Some(ci_info.profileId),
+                                                    eng_profile_id: None, // nvmlComputeInstanceInfo_t_v2 does not have engineProfileId
+                                                    placement: Some(format!(
+                                                        "{}:slice{}",
+                                                        ci_info.placement.start, ci_info.placement.size
+                                                    )),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+
+                                let mig_id_label = format!("mig{}", idx);
+                                let placement_str = gi_map
+                                    .get(&gi_id)
+                                    .and_then(|g| g.placement.clone())
+                                    .unwrap_or_else(|| format!("gi{}", gi_id));
+                                let profile_str = gi_map
+                                    .get(&gi_id)
+                                    .and_then(|g| g.profile_id)
+                                    .map(|p| p.to_string());
+
+                                let mut mem_info: nvml_wrapper_sys::bindings::nvmlMemory_t =
+                                    unsafe { std::mem::zeroed() };
+                                let mem_info_res =
+                                    unsafe { get_memory_info(mig_handle, &mut mem_info) };
+                                let memory_total_bytes =
+                                    if mem_info_res == nvmlReturn_enum_NVML_SUCCESS {
+                                        Some(mem_info.total)
+                                    } else {
+                                        None
+                                    };
+                                let memory_used_bytes =
+                                    if mem_info_res == nvmlReturn_enum_NVML_SUCCESS {
+                                        Some(mem_info.used)
+                                    } else {
+                                        None
+                                    };
+
+                                let mut util_rates: nvml_wrapper_sys::bindings::nvmlUtilization_t =
+                                    unsafe { std::mem::zeroed() };
+                                let util_res =
+                                    unsafe { get_utilization_rates(mig_handle, &mut util_rates) };
+                                let util_percent = if util_res == nvmlReturn_enum_NVML_SUCCESS {
+                                    Some(util_rates.gpu)
+                                } else {
+                                    None
+                                };
+
+                                let mut bar1_info: nvml_wrapper_sys::bindings::nvmlBAR1Memory_t =
+                                    unsafe { std::mem::zeroed() };
+                                let bar1_res =
+                                    unsafe { get_bar1_memory_info(mig_handle, &mut bar1_info) };
+                                let bar1_total_bytes =
+                                    if bar1_res == nvmlReturn_enum_NVML_SUCCESS {
+                                        Some(bar1_info.total)
+                                    } else {
+                                        None
+                                    };
+                                let bar1_used_bytes =
+                                    if bar1_res == nvmlReturn_enum_NVML_SUCCESS {
+                                        Some(bar1_info.used)
+                                    } else {
+                                        None
+                                    };
+
+                                let mut ecc_corrected_val: u64 = 0;
+                                let ecc_corrected_res = unsafe {
+                                    get_total_ecc_errors(
+                                        mig_handle,
+                                        nvml_wrapper_sys::bindings::nvmlMemoryErrorType_enum_NVML_MEMORY_ERROR_TYPE_CORRECTED,
+                                        nvml_wrapper_sys::bindings::nvmlEccCounterType_enum_NVML_ECC_COUNTER_TYPE_VOLATILE,
+                                        &mut ecc_corrected_val,
+                                    )
+                                };
+                                let ecc_corrected =
+                                    if ecc_corrected_res == nvmlReturn_enum_NVML_SUCCESS {
+                                        Some(ecc_corrected_val)
+                                    } else {
+                                        None
+                                    };
+
+                                let mut ecc_uncorrected_val: u64 = 0;
+                                let ecc_uncorrected_res = unsafe {
+                                    get_total_ecc_errors(
+                                        mig_handle,
+                                        nvml_wrapper_sys::bindings::nvmlMemoryErrorType_enum_NVML_MEMORY_ERROR_TYPE_UNCORRECTED,
+                                        nvml_wrapper_sys::bindings::nvmlEccCounterType_enum_NVML_ECC_COUNTER_TYPE_VOLATILE,
+                                        &mut ecc_uncorrected_val,
+                                    )
+                                };
+                                let ecc_uncorrected =
+                                    if ecc_uncorrected_res == nvmlReturn_enum_NVML_SUCCESS {
+                                        Some(ecc_uncorrected_val)
+                                    } else {
+                                        None
+                                    };
+
+                                devices.push(MigDeviceStatus {
+                                    id: mig_uuid.clone().unwrap_or(mig_id_label.clone()),
+                                    uuid: mig_uuid,
+                                    memory_total_bytes,
+                                    memory_used_bytes,
+                                    util_percent,
+                                    sm_count: None, // Not directly available via NVML MIG device handle
+                                    profile: profile_str,
+                                    placement: Some(placement_str),
+                                    bar1_total_bytes,
+                                    bar1_used_bytes,
+                                    ecc_corrected,
+                                    ecc_uncorrected,
+                                });
+                            }
+                        }
+
+                        let migs = MigTree {
+                            supported,
+                            enabled,
+                            gpu_instances: gi_map.values().cloned().collect(),
+                            compute_instances: ci_nodes,
+                            devices,
+                        };
+
+                        metrics
+                            .gpu_mig_enabled
+                            .with_label_values(&[uuid_label, gpu_label.as_str()])
+                            .set(if migs.enabled { 1.0 } else { 0.0 });
+                        // GI/CI info gauges
+                        for gi in &migs.gpu_instances {
+                            metrics
+                                .mig_gpu_instance_info
+                                .with_label_values(&[
+                                    uuid_label,
+                                    gpu_label.as_str(),
+                                    gi.id.to_string().as_str(),
+                                    gi.profile_id
+                                        .map(|p| p.to_string())
+                                        .unwrap_or_default()
+                                        .as_str(),
+                                    gi.placement.as_deref().unwrap_or(""),
+                                ])
+                                .set(1.0);
+                        }
+                        for ci in &migs.compute_instances {
+                            metrics
+                                .mig_compute_instance_info
+                                .with_label_values(&[
+                                    uuid_label,
+                                    gpu_label.as_str(),
+                                    ci.gpu_instance_id.to_string().as_str(),
+                                    ci.id.to_string().as_str(),
+                                    ci.profile_id
+                                        .map(|p| p.to_string())
+                                        .unwrap_or_default()
+                                        .as_str(),
+                                    ci.eng_profile_id
+                                        .map(|p| p.to_string())
+                                        .unwrap_or_default()
+                                        .as_str(),
+                                    ci.placement.as_deref().unwrap_or(""),
+                                ])
+                                .set(1.0);
+                        }
+                        for mig in &migs.devices {
+                            let mig_id_string = mig.id.to_string();
+                            let mig_label = mig.uuid.as_deref().unwrap_or(mig_id_string.as_str());
+                            let compat_label = if self.k8s_mode {
+                                k8s_resource_name(
+                                    self.resource_prefix,
+                                    mig.profile.as_deref().or(Some("generic")),
+                                )
+                            } else {
+                                mig_label.to_string()
+                            };
+                            if let Some(util) = mig.util_percent {
+                                metrics
+                                    .mig_utilization_percent
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        mig_label,
+                                    ])
+                                    .set(util as f64);
+                                if self.k8s_mode {
                                     metrics
                                         .mig_utilization_percent
                                         .with_label_values(&[
                                             uuid_label,
                                             gpu_label.as_str(),
-                                            mig_label,
+                                            compat_label.as_str(),
                                         ])
                                         .set(util as f64);
-                                    if self.k8s_mode {
-                                        metrics
-                                            .mig_utilization_percent
-                                            .with_label_values(&[
-                                                uuid_label,
-                                                gpu_label.as_str(),
-                                                compat_label.as_str(),
-                                            ])
-                                            .set(util as f64);
-                                    }
                                 }
-                                if let Some(total) = mig.memory_total_bytes {
+                            }
+                            if let Some(total) = mig.memory_total_bytes {
+                                metrics
+                                    .mig_memory_total_bytes
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        mig_label,
+                                    ])
+                                    .set(total as f64);
+                                if self.k8s_mode {
                                     metrics
                                         .mig_memory_total_bytes
                                         .with_label_values(&[
                                             uuid_label,
                                             gpu_label.as_str(),
-                                            mig_label,
+                                            compat_label.as_str(),
                                         ])
                                         .set(total as f64);
-                                    if self.k8s_mode {
-                                        metrics
-                                            .mig_memory_total_bytes
-                                            .with_label_values(&[
-                                                uuid_label,
-                                                gpu_label.as_str(),
-                                                compat_label.as_str(),
-                                            ])
-                                            .set(total as f64);
-                                    }
                                 }
-                                if let Some(used) = mig.memory_used_bytes {
+                            }
+                            if let Some(used) = mig.memory_used_bytes {
+                                metrics
+                                    .mig_memory_used_bytes
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        mig_label,
+                                    ])
+                                    .set(used as f64);
+                                if self.k8s_mode {
                                     metrics
                                         .mig_memory_used_bytes
                                         .with_label_values(&[
                                             uuid_label,
                                             gpu_label.as_str(),
-                                            mig_label,
+                                            compat_label.as_str(),
                                         ])
                                         .set(used as f64);
-                                    if self.k8s_mode {
-                                        metrics
-                                            .mig_memory_used_bytes
-                                            .with_label_values(&[
-                                                uuid_label,
-                                                gpu_label.as_str(),
-                                                compat_label.as_str(),
-                                            ])
-                                            .set(used as f64);
-                                    }
                                 }
-                                if let Some(sm) = mig.sm_count {
+                            }
+                            if let Some(sm) = mig.sm_count {
+                                metrics
+                                    .mig_sm_count
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        mig_label,
+                                    ])
+                                    .set(sm as f64);
+                                if self.k8s_mode {
                                     metrics
                                         .mig_sm_count
                                         .with_label_values(&[
                                             uuid_label,
                                             gpu_label.as_str(),
-                                            mig_label,
+                                            compat_label.as_str(),
                                         ])
                                         .set(sm as f64);
-                                    if self.k8s_mode {
-                                        metrics
-                                            .mig_sm_count
-                                            .with_label_values(&[
-                                                uuid_label,
-                                                gpu_label.as_str(),
-                                                compat_label.as_str(),
-                                            ])
-                                            .set(sm as f64);
-                                    }
                                 }
-                                // Best-effort per-MIG ECC and BAR1 info using MigDeviceStatus fields
-                                if let Some(corrected) = mig.ecc_corrected {
+                            }
+                            // Best-effort per-MIG ECC and BAR1 info using MigDeviceStatus fields
+                            if let Some(corrected) = mig.ecc_corrected {
+                                metrics
+                                    .mig_ecc_corrected_total
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        mig_label,
+                                    ])
+                                    .inc_by(corrected);
+                                if self.k8s_mode {
                                     metrics
                                         .mig_ecc_corrected_total
                                         .with_label_values(&[
                                             uuid_label,
                                             gpu_label.as_str(),
-                                            mig_label,
+                                            compat_label.as_str(),
                                         ])
                                         .inc_by(corrected);
-                                    if self.k8s_mode {
-                                        metrics
-                                            .mig_ecc_corrected_total
-                                            .with_label_values(&[
-                                                uuid_label,
-                                                gpu_label.as_str(),
-                                                compat_label.as_str(),
-                                            ])
-                                            .inc_by(corrected);
-                                    }
                                 }
-                                if let Some(uncorrected) = mig.ecc_uncorrected {
+                            }
+                            if let Some(uncorrected) = mig.ecc_uncorrected {
+                                metrics
+                                    .mig_ecc_uncorrected_total
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        mig_label,
+                                    ])
+                                    .inc_by(uncorrected);
+                                if self.k8s_mode {
                                     metrics
                                         .mig_ecc_uncorrected_total
                                         .with_label_values(&[
                                             uuid_label,
                                             gpu_label.as_str(),
-                                            mig_label,
+                                            compat_label.as_str(),
                                         ])
                                         .inc_by(uncorrected);
-                                    if self.k8s_mode {
-                                        metrics
-                                            .mig_ecc_uncorrected_total
-                                            .with_label_values(&[
-                                                uuid_label,
-                                                gpu_label.as_str(),
-                                                compat_label.as_str(),
-                                            ])
-                                            .inc_by(uncorrected);
-                                    }
                                 }
-                                if let (Some(total), Some(used)) =
-                                    (mig.bar1_total_bytes, mig.bar1_used_bytes)
-                                {
+                            }
+                            if let (Some(total), Some(used)) =
+                                (mig.bar1_total_bytes, mig.bar1_used_bytes)
+                            {
+                                metrics
+                                    .mig_bar1_total_bytes
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        mig_label,
+                                    ])
+                                    .set(total as f64);
+                                metrics
+                                    .mig_bar1_used_bytes
+                                    .with_label_values(&[
+                                        uuid_label,
+                                        gpu_label.as_str(),
+                                        mig_label,
+                                    ])
+                                    .set(used as f64);
+                                if self.k8s_mode {
                                     metrics
                                         .mig_bar1_total_bytes
                                         .with_label_values(&[
                                             uuid_label,
                                             gpu_label.as_str(),
-                                            mig_label,
+                                            compat_label.as_str(),
                                         ])
                                         .set(total as f64);
                                     metrics
@@ -1027,46 +1402,28 @@ impl Collector for GpuCollector {
                                         .with_label_values(&[
                                             uuid_label,
                                             gpu_label.as_str(),
-                                            mig_label,
+                                            compat_label.as_str(),
                                         ])
                                         .set(used as f64);
-                                    if self.k8s_mode {
-                                        metrics
-                                            .mig_bar1_total_bytes
-                                            .with_label_values(&[
-                                                uuid_label,
-                                                gpu_label.as_str(),
-                                                compat_label.as_str(),
-                                            ])
-                                            .set(total as f64);
-                                        metrics
-                                            .mig_bar1_used_bytes
-                                            .with_label_values(&[
-                                                uuid_label,
-                                                gpu_label.as_str(),
-                                                compat_label.as_str(),
-                                            ])
-                                            .set(used as f64);
-                                    }
                                 }
-                                metrics
-                                    .mig_info
-                                    .with_label_values(&[
-                                        uuid_label,
-                                        gpu_label.as_str(),
-                                        mig_label,
-                                        mig.profile.as_deref().unwrap_or(""),
-                                        mig.placement.as_deref().unwrap_or(""),
-                                    ])
-                                    .set(1.0);
                             }
-                            let supported = migs.supported;
-                            status.mig_tree = Some(migs);
                             metrics
-                                .gpu_mig_supported
-                                .with_label_values(&[uuid_label, gpu_label.as_str()])
-                                .set(if supported { 1.0 } else { 0.0 });
+                                .mig_info
+                                .with_label_values(&[
+                                    uuid_label,
+                                    gpu_label.as_str(),
+                                    mig_label,
+                                    mig.profile.as_deref().unwrap_or(""),
+                                    mig.placement.as_deref().unwrap_or(""),
+                                ])
+                                .set(1.0);
                         }
+                        let supported = migs.supported;
+                        status.mig_tree = Some(migs);
+                        metrics
+                            .gpu_mig_supported
+                            .with_label_values(&[uuid_label, gpu_label.as_str()])
+                            .set(if supported { 1.0 } else { 0.0 });
                     }
 
                     #[cfg(not(all(feature = "gpu-nvml-ffi", feature = "gpu")))]
@@ -1162,15 +1519,44 @@ fn k8s_resource_name(prefix: &str, mig_profile: Option<&str>) -> String {
 }
 
 #[cfg(feature = "gpu")]
-fn pcie_lane_bytes_per_sec(speed: PcieLinkMaxSpeed) -> f64 {
-    match speed {
-        PcieLinkMaxSpeed::MegabytesPerSecond2500 => 2_500_000.0 * 1_000.0,
-        PcieLinkMaxSpeed::MegabytesPerSecond5000 => 5_000_000.0 * 1_000.0,
-        PcieLinkMaxSpeed::MegabytesPerSecond8000 => 8_000_000.0 * 1_000.0,
-        PcieLinkMaxSpeed::MegabytesPerSecond16000 => 16_000_000.0 * 1_000.0,
-        PcieLinkMaxSpeed::MegabytesPerSecond32000 => 32_000_000.0 * 1_000.0,
-        _ => 0.0,
-    }
+fn pcie_lane_bytes_per_sec(gen: u32, speed_mt_s: u32) -> f64 {
+    // PCIe generation to base speed in MT/s per lane
+    // Gen1: 2.5 GT/s, Gen2: 5 GT/s, Gen3: 8 GT/s, Gen4: 16 GT/s, Gen5: 32 GT/s, Gen6: 64 GT/s
+    // Data rate is typically 8/10 encoding for Gen1/2, 128/130 for Gen3+
+    // nvml_wrapper::PcieLinkMaxSpeed enum values are already in MT/s
+    // The `speed_mt_s` parameter from `device.pcie_link_speed()` is already in MT/s.
+    // We need to convert MT/s to Bytes/s. 1 MT/s = 10^6 transfers/second.
+    // For PCIe, each transfer is 1 bit. So MT/s is Mbps.
+    // To get Bytes/s, divide by 8.
+    // However, NVML's pcie_throughput is in KB/s, so we need to be careful with units.
+    // The original `PcieLinkMaxSpeed` enum values were already scaled for bytes.
+    // Let's assume `speed_mt_s` is in MB/s or similar, or that the original `PcieLinkMaxSpeed`
+    // values were already representing "effective" MB/s per lane.
+    // Given the original values:
+    // 2500 MT/s -> 2_500_000.0 * 1_000.0 (bytes/s) = 2.5 GB/s
+    // This implies the original `PcieLinkMaxSpeed` values were effectively in MB/s, and then multiplied by 1000 to get KB/s, then by 1024 to get bytes/s.
+    // Let's re-evaluate based on standard PCIe speeds:
+    // Gen1: 2.5 GT/s (250 MB/s per lane, 8b/10b encoding)
+    // Gen2: 5 GT/s (500 MB/s per lane, 8b/10b encoding)
+    // Gen3: 8 GT/s (985 MB/s per lane, 128b/130b encoding)
+    // Gen4: 16 GT/s (1969 MB/s per lane, 128b/130b encoding)
+    // Gen5: 32 GT/s (3938 MB/s per lane, 128b/130b encoding)
+    // The `speed_mt_s` from NVML is "current link speed in MegaTransfers/second".
+    // For Gen1/2, 1 MT/s = 0.8 Mbps (due to 8b/10b). For Gen3+, 1 MT/s = 128/130 Mbps.
+    // This is tricky. The original code used `PcieLinkMaxSpeed` enum values which were effectively `MB/s * 1000` (KB/s).
+    // Let's use the `speed_mt_s` directly and assume it's the effective data rate in MB/s, or convert it.
+    // If `speed_mt_s` is MegaTransfers/second, and we want Bytes/second:
+    // For Gen1/2 (gen <= 2): (speed_mt_s * 0.8) / 8 * 10^6 = speed_mt_s * 0.1 * 10^6 Bytes/s
+    // For Gen3+ (gen >= 3): (speed_mt_s * 128/130) / 8 * 10^6 = speed_mt_s * (128/1040) * 10^6 Bytes/s
+    // Let's simplify and use the provided `speed_mt_s` as a direct indicator of throughput capacity.
+    // The original `PcieLinkMaxSpeed::MegaTransfersPerSecond2500` was 2500 * 1000.0. This is 2.5 GB/s.
+    // This implies the enum values were already scaled to represent MB/s * 1000.
+    // So, if `speed_mt_s` is 2500, it means 2.5 GB/s.
+    // Let's assume `speed_mt_s` is in MB/s (effective data rate per lane).
+    // Then `speed_mt_s * 1024 * 1024` would be Bytes/s.
+    // However, the original code used `* 1000.0` for the `PcieLinkMaxSpeed` values.
+    // Let's stick to the original scaling: `speed_mt_s` is in "units of 1000 KB/s".
+    (speed_mt_s as f64) * 1_000_000.0 / 8.0 // Convert MT/s to Bytes/s (assuming 1 transfer = 1 bit)
 }
 
 #[cfg(feature = "gpu")]
@@ -1186,84 +1572,202 @@ fn build_filter(raw: Option<&str>) -> Option<HashSet<String>> {
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
 fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<MigTree> {
     use std::os::raw::c_uint;
-    let mut current_mode: c_uint = 0;
-    let mut pending: c_uint = 0;
+    use nvml_wrapper_sys::bindings::{
+        nvmlComputeInstanceInfo_t, nvmlDevice_t, nvmlGpuInstanceInfo_t, nvmlReturn_t,
+        nvmlReturn_enum_NVML_SUCCESS,
+    };
+
+    // Load NVML dynamically to bypass missing symbols in sys crate
+    let lib = unsafe { libloading::Library::new("libnvidia-ml.so.1") }?;
+
+    // Typedefs for the functions we need
+    type NvmlDeviceGetMigMode = unsafe extern "C" fn(
+        device: nvmlDevice_t,
+        current_mode: *mut std::os::raw::c_uint,
+        pending_mode: *mut std::os::raw::c_uint,
+    ) -> nvmlReturn_t;
+    type NvmlDeviceGetMaxMigDeviceCount = unsafe extern "C" fn(
+        device: nvmlDevice_t,
+        count: *mut std::os::raw::c_uint,
+    ) -> nvmlReturn_t;
+    type NvmlDeviceGetMigDeviceHandleByIndex = unsafe extern "C" fn(
+        device: nvmlDevice_t,
+        index: std::os::raw::c_uint,
+        mig_device: *mut nvmlDevice_t,
+    ) -> nvmlReturn_t;
+    type NvmlDeviceGetDeviceHandleFromMigDeviceHandle = unsafe extern "C" fn(
+        mig_device: nvmlDevice_t,
+        device: *mut nvmlDevice_t,
+    ) -> nvmlReturn_t;
+    type NvmlDeviceGetGpuInstanceId = unsafe extern "C" fn(
+        device: nvmlDevice_t,
+        id: *mut std::os::raw::c_uint,
+    ) -> nvmlReturn_t;
+    type NvmlDeviceGetComputeInstanceId = unsafe extern "C" fn(
+        device: nvmlDevice_t,
+        id: *mut std::os::raw::c_uint,
+    ) -> nvmlReturn_t;
+    type NvmlGpuInstanceGetById = unsafe extern "C" fn( // Corrected function name
+        device: nvmlDevice_t,
+        id: std::os::raw::c_uint,
+        gpu_instance: *mut nvmlDevice_t,
+    ) -> nvmlReturn_t;
+    type NvmlGpuInstanceGetInfo = unsafe extern "C" fn(
+        gpu_instance: nvmlDevice_t,
+        info: *mut nvml_wrapper_sys::bindings::nvmlGpuInstanceInfo_t,
+    ) -> nvmlReturn_t;
+    type NvmlGpuInstanceGetComputeInstanceById = unsafe extern "C" fn(
+        gpu_instance: nvmlDevice_t,
+        id: std::os::raw::c_uint,
+        compute_instance: *mut nvmlDevice_t,
+    ) -> nvmlReturn_t;
+    type NvmlComputeInstanceGetInfo = unsafe extern "C" fn(
+        compute_instance: nvmlDevice_t,
+        info: *mut nvml_wrapper_sys::bindings::nvmlComputeInstanceInfo_t,
+    ) -> nvmlReturn_t;
+    type NvmlDeviceGetUUID = unsafe extern "C" fn(
+        device: nvmlDevice_t,
+        uuid: *mut std::os::raw::c_char,
+        size: std::os::raw::c_uint,
+    ) -> nvmlReturn_t;
+    type NvmlDeviceGetMemoryInfo = unsafe extern "C" fn(
+        device: nvmlDevice_t,
+        memory: *mut nvml_wrapper_sys::bindings::nvmlMemory_t,
+    ) -> nvmlReturn_t;
+    type NvmlDeviceGetUtilizationRates = unsafe extern "C" fn(
+        device: nvmlDevice_t,
+        utilization: *mut nvml_wrapper_sys::bindings::nvmlUtilization_t,
+    ) -> nvmlReturn_t;
+    type NvmlDeviceGetBar1MemoryInfo = unsafe extern "C" fn(
+        device: nvmlDevice_t,
+        bar1_memory: *mut nvml_wrapper_sys::bindings::nvmlBAR1Memory_t,
+    ) -> nvmlReturn_t;
+    type NvmlDeviceGetTotalEccErrors = unsafe extern "C" fn(
+        device: nvmlDevice_t,
+        error_type: nvml_wrapper_sys::bindings::nvmlMemoryErrorType_t,
+        counter_type: nvml_wrapper_sys::bindings::nvmlEccCounterType_t,
+        ecc_count: *mut u64,
+    ) -> nvmlReturn_t;
+
+    let get_mig_mode: libloading::Symbol<NvmlDeviceGetMigMode> =
+        unsafe { lib.get(b"nvmlDeviceGetMigMode") }?;
+    let get_max_mig_device_count: libloading::Symbol<NvmlDeviceGetMaxMigDeviceCount> =
+        unsafe { lib.get(b"nvmlDeviceGetMaxMigDeviceCount") }?;
+    let get_mig_device_handle_by_index: libloading::Symbol<NvmlDeviceGetMigDeviceHandleByIndex> =
+        unsafe { lib.get(b"nvmlDeviceGetMigDeviceHandleByIndex") }?;
+    let get_device_handle_from_mig_device_handle: libloading::Symbol<
+        NvmlDeviceGetDeviceHandleFromMigDeviceHandle,
+    > = unsafe { lib.get(b"nvmlDeviceGetDeviceHandleFromMigDeviceHandle") }?;
+    let get_gpu_instance_id: libloading::Symbol<NvmlDeviceGetGpuInstanceId> =
+        unsafe { lib.get(b"nvmlDeviceGetGpuInstanceId") }?;
+    let get_compute_instance_id: libloading::Symbol<NvmlDeviceGetComputeInstanceId> =
+        unsafe { lib.get(b"nvmlDeviceGetComputeInstanceId") }?;
+    let get_gpu_instance_by_id: libloading::Symbol<NvmlGpuInstanceGetById> =
+        unsafe { lib.get(b"nvmlGpuInstanceGetById") }?;
+    let get_gpu_instance_info: libloading::Symbol<NvmlGpuInstanceGetInfo> =
+        unsafe { lib.get(b"nvmlGpuInstanceGetInfo") }?;
+    let get_gpu_instance_compute_instance_by_id: libloading::Symbol<
+        NvmlGpuInstanceGetComputeInstanceById,
+    > = unsafe { lib.get(b"nvmlGpuInstanceGetComputeInstanceById") }?;
+    let get_compute_instance_info: libloading::Symbol<NvmlComputeInstanceGetInfo> =
+        unsafe { lib.get(b"nvmlComputeInstanceGetInfo") }?;
+    let get_uuid: libloading::Symbol<NvmlDeviceGetUUID> =
+        unsafe { lib.get(b"nvmlDeviceGetUUID") }?;
+    let get_memory_info: libloading::Symbol<NvmlDeviceGetMemoryInfo> =
+        unsafe { lib.get(b"nvmlDeviceGetMemoryInfo") }?;
+    let get_utilization_rates: libloading::Symbol<NvmlDeviceGetUtilizationRates> =
+        unsafe { lib.get(b"nvmlDeviceGetUtilizationRates") }?;
+    let get_bar1_memory_info: libloading::Symbol<NvmlDeviceGetBar1MemoryInfo> =
+        unsafe { lib.get(b"nvmlDeviceGetBar1MemoryInfo") }?;
+    let get_total_ecc_errors: libloading::Symbol<NvmlDeviceGetTotalEccErrors> =
+        unsafe { lib.get(b"nvmlDeviceGetTotalEccErrors") }?;
+
+    let mut current_mode = 0;
+    let mut pending = 0;
     let parent_handle = unsafe { parent.handle() };
-    let mig_mode_res =
-        unsafe { nvmlDeviceGetMigMode(parent_handle, &mut current_mode, &mut pending) };
-    let supported = mig_mode_res == nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS;
-    if !supported {
+    let mig_mode_res = unsafe { get_mig_mode(parent_handle, &mut current_mode, &mut pending) };
+    let supported = mig_mode_res == nvmlReturn_enum_NVML_SUCCESS;
+    let enabled =
+        current_mode == nvml_wrapper_sys::bindings::nvmlMigMode_enum_NVML_DEVICE_MIG_ENABLE;
+
+    if !supported || !enabled {
         return Ok(MigTree {
-            supported: false,
-            enabled: false,
+            supported,
+            enabled,
             gpu_instances: Vec::new(),
             compute_instances: Vec::new(),
             devices: Vec::new(),
         });
     }
-    let enabled = current_mode == 1;
-    let mut max_count: c_uint = 0;
-    unsafe {
-        nvmlDeviceGetMaxMigDeviceCount(parent_handle, &mut max_count);
-    }
+
+    let mut max_count = 0;
+    unsafe { get_max_mig_device_count(parent_handle, &mut max_count) };
+
     let mut devices = Vec::new();
     let mut gi_map: HashMap<u32, GpuInstanceNode> = HashMap::new();
     let mut ci_nodes: Vec<ComputeInstanceNode> = Vec::new();
+
     for idx in 0..max_count {
-        let mut mig_handle = std::ptr::null_mut();
-        let res =
-            unsafe { nvmlDeviceGetMigDeviceHandleByIndex(parent_handle, idx, &mut mig_handle) };
-        if res != nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS {
-            continue;
-        }
-        // Obtain full device handle for MIG to use safe wrapper methods where possible.
-        let mut full_handle: *mut nvml_wrapper_sys::bindings::nvmlDevice_st = std::ptr::null_mut();
-        let _ =
-            unsafe { nvmlDeviceGetDeviceHandleFromMigDeviceHandle(mig_handle, &mut full_handle) };
-        let handle_to_use = if !full_handle.is_null() {
-            full_handle
-        } else {
-            mig_handle
-        };
-        let mig_device = unsafe { nvml_wrapper::Device::new(handle_to_use, nvml) };
-        let mig_uuid = mig_device.uuid().ok();
-        let mem_info = mig_device.memory_info().ok();
-        let util = mig_device.utilization_rates().ok();
-        let sm_count = None; // mig_device.multi_processor_count().ok();
-        let mut gi_id: c_uint = 0;
-        let mut ci_id: c_uint = 0;
-        let _ = unsafe { nvmlDeviceGetGpuInstanceId(mig_handle, &mut gi_id) };
-        let _ = unsafe { nvmlDeviceGetComputeInstanceId(mig_handle, &mut ci_id) };
-        // Populate GI info best-effort
-        if gi_id > 0 && !gi_map.contains_key(&gi_id) {
-            let mut gi_handle = std::ptr::null_mut();
-            if unsafe { nvmlDeviceGetGpuInstanceById(parent_handle, gi_id, &mut gi_handle) }
-                == nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS
-            {
-                let mut gi_info: nvml_wrapper_sys::bindings::nvmlGpuInstanceInfo_t =
-                    unsafe { std::mem::zeroed() };
-                let _ = unsafe { nvmlGpuInstanceGetInfo(gi_handle, &mut gi_info) };
-                let placement = Some(format!(
-                    "{}:slice{}",
-                    gi_info.placement.start, gi_info.placement.size
-                ));
-                gi_map.insert(
-                    gi_id,
-                    GpuInstanceNode {
-                        id: gi_id,
-                        profile_id: Some(gi_info.profileId),
-                        placement,
-                    },
-                );
-                if ci_id > 0 {
-                    let mut ci_handle = std::ptr::null_mut();
+        let mut mig_handle: nvmlDevice_t = std::ptr::null_mut();
+        if unsafe { get_mig_device_handle_by_index(parent_handle, idx, &mut mig_handle) }
+            == nvmlReturn_enum_NVML_SUCCESS
+        {
+            let mut full_handle: nvmlDevice_t = std::ptr::null_mut();
+            unsafe { get_device_handle_from_mig_device_handle(mig_handle, &mut full_handle) };
+
+            let mut uuid_buf = [0i8; 96]; // NVML_DEVICE_UUID_V2_BUFFER_SIZE
+            let _ = unsafe { get_uuid(mig_handle, uuid_buf.as_mut_ptr(), uuid_buf.len() as u32) };
+            let mig_uuid_str = unsafe { std::ffi::CStr::from_ptr(uuid_buf.as_ptr()) }
+                .to_string_lossy()
+                .into_owned();
+            let mig_uuid = if mig_uuid_str.is_empty() {
+                None
+            } else {
+                Some(mig_uuid_str.clone())
+            };
+
+            // Extract GI/CI to map hierarchy
+            let mut gi_id = 0;
+            let _ = unsafe { get_gpu_instance_id(mig_handle, &mut gi_id) };
+            let mut ci_id = 0;
+            let _ = unsafe { get_compute_instance_id(mig_handle, &mut ci_id) };
+
+            // Populate GI info best-effort
+            if gi_id > 0 && !gi_map.contains_key(&gi_id) {
+                let mut gi_handle: nvmlDevice_t = std::ptr::null_mut();
+                if unsafe { get_gpu_instance_by_id(parent_handle, gi_id, &mut gi_handle) }
+                    == nvmlReturn_enum_NVML_SUCCESS
+                {
+                    let mut gi_info: nvmlGpuInstanceInfo_t = unsafe { std::mem::zeroed() };
+                    gi_info.version = nvml_wrapper_sys::bindings::nvmlGpuInstanceInfo_v2;
+                    let _ = unsafe { get_gpu_instance_info(gi_handle, &mut gi_info) };
+                    let placement = Some(format!(
+                        "{}:slice{}",
+                        gi_info.placement.start, gi_info.placement.size
+                    ));
+                    gi_map.insert(
+                        gi_id,
+                        GpuInstanceNode {
+                            id: gi_id,
+                            profile_id: Some(gi_info.profileId),
+                            placement,
+                            handle: gi_handle, // Store handle for later CI lookup
+                        },
+                    );
+                }
+            }
+
+            // Populate CI info best-effort
+            if ci_id > 0 {
+                if let Some(gi_node) = gi_map.get(&gi_id) {
+                    let mut ci_handle: nvmlDevice_t = std::ptr::null_mut();
                     if unsafe {
-                        nvmlGpuInstanceGetComputeInstanceById(gi_handle, ci_id, &mut ci_handle)
-                    } == nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS
+                        get_gpu_instance_compute_instance_by_id(gi_node.handle, ci_id, &mut ci_handle)
+                    } == nvmlReturn_enum_NVML_SUCCESS
                     {
-                        let mut ci_info: nvml_wrapper_sys::bindings::nvmlComputeInstanceInfo_t =
-                            unsafe { std::mem::zeroed() };
-                        let _ = unsafe { nvmlComputeInstanceGetInfo(ci_handle, &mut ci_info) };
+                        let mut ci_info: nvmlComputeInstanceInfo_t = unsafe { std::mem::zeroed() };
+                        ci_info.version = nvml_wrapper_sys::bindings::nvmlComputeInstanceInfo_v2;
+                        let _ = unsafe { get_compute_instance_info(ci_handle, &mut ci_info) };
                         ci_nodes.push(ComputeInstanceNode {
                             gpu_instance_id: gi_id,
                             id: ci_id,

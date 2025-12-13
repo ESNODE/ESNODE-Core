@@ -63,14 +63,29 @@ pub unsafe fn pcie_ext_counters(device: nvmlDevice_t) -> Result<PcieExt, NvmlExt
     // nvmlDeviceGetPcieReplayCounter is already available in wrapper; here we try best-effort extras.
     // As nvml-wrapper does not expose these, we attempt direct bindings when available; otherwise return NotSupported.
     unsafe {
+        let lib = libloading::Library::new("libnvidia-ml.so.1").map_err(|_| NvmlExtError::NotSupported)?;
+
+        type NvmlDeviceGetPcieStats = unsafe extern "C" fn(
+            device: nvmlDevice_t,
+            counter: u32,
+            value: *mut u32,
+        ) -> nvmlReturn_t;
+        type NvmlDeviceGetPcieReplayCounter = unsafe extern "C" fn(
+            device: nvmlDevice_t,
+            value: *mut u32,
+        ) -> nvmlReturn_t;
+
+        let get_pcie_stats: libloading::Symbol<NvmlDeviceGetPcieStats> = lib.get(b"nvmlDeviceGetPcieStats").map_err(|_| NvmlExtError::NotSupported)?;
+        let get_pcie_replay_counter: libloading::Symbol<NvmlDeviceGetPcieReplayCounter> = lib.get(b"nvmlDeviceGetPcieReplayCounter").map_err(|_| NvmlExtError::NotSupported)?;
+
         let mut corr: u32 = 0;
         let mut atomic: u32 = 0;
-        let corr_ret = nvmlDeviceGetPcieStats(
+        let corr_ret = get_pcie_stats(
             device,
             nvmlPcieUtilCounter_enum_NVML_PCIE_UTIL_TX_BYTES,
             &mut corr,
         );
-        let atomic_ret = nvmlDeviceGetPcieReplayCounter(device, &mut atomic);
+        let atomic_ret = get_pcie_replay_counter(device, &mut atomic);
         let mut out = PcieExt::default();
         if corr_ret == nvmlReturn_enum_NVML_SUCCESS {
             out.correctable_errors = Some(corr as u64);
@@ -101,12 +116,23 @@ pub unsafe fn get_field_values(
     device: nvmlDevice_t,
     field_ids: &[u32],
 ) -> Result<FieldValues, NvmlExtError> {
+) -> Result<FieldValues, NvmlExtError> {
     unsafe {
+        let lib = libloading::Library::new("libnvidia-ml.so.1").map_err(|_| NvmlExtError::NotSupported)?;
+        
+        type NvmlDeviceGetFieldValues = unsafe extern "C" fn(
+            device: nvmlDevice_t,
+            valuesCount: u32,
+            values: *mut nvmlFieldValue_t,
+        ) -> nvmlReturn_t;
+
+        let get_field_values_fn: libloading::Symbol<NvmlDeviceGetFieldValues> = lib.get(b"nvmlDeviceGetFieldValues").map_err(|_| NvmlExtError::NotSupported)?;
+
         let mut fields: Vec<nvmlFieldValue_t> = vec![std::mem::zeroed(); field_ids.len()];
         for (i, f) in field_ids.iter().enumerate() {
             fields[i].fieldId = *f;
         }
-        let ret = nvmlDeviceGetFieldValues(device, fields.len() as u32, fields.as_mut_ptr());
+        let ret = get_field_values_fn(device, fields.len() as u32, fields.as_mut_ptr());
         if ret != nvmlReturn_enum_NVML_SUCCESS {
             return Err(NvmlExtError::NvmlReturn(ret as i32));
         }
