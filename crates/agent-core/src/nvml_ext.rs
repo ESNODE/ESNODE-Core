@@ -6,7 +6,6 @@ use nvml_wrapper_sys::bindings::*;
 
 #[cfg(all(feature = "gpu-nvml-ffi-ext", feature = "gpu"))]
 
-
 /// Errors from extended NVML calls.
 #[derive(thiserror::Error, Debug)]
 pub enum NvmlExtError {
