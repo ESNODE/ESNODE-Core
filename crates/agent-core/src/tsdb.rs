@@ -109,6 +109,19 @@ impl BlockWriter {
 
     async fn finish(mut self) -> Result<()> {
         self.writer.flush().await?;
+        self.persist_index_files().await?;
+        Ok(())
+    }
+
+    async fn flush_if_needed(&mut self, ts_ms: i64) -> Result<()> {
+        if ts_ms - self.last_flush_ms >= FLUSH_INTERVAL.as_millis() as i64 {
+            self.writer.flush().await?;
+            self.last_flush_ms = ts_ms;
+        }
+        Ok(())
+    }
+
+    async fn persist_index_files(&self) -> Result<()> {
         let meta_path = self.dir.join("meta.json");
         let index_path = self.dir.join("index.json");
         let meta_bytes = serde_json::to_vec_pretty(&self.meta)?;
@@ -118,14 +131,6 @@ impl BlockWriter {
         fs::write(&index_path, &meta_bytes)
             .await
             .with_context(|| format!("writing index {}", index_path.display()))?;
-        Ok(())
-    }
-
-    async fn flush_if_needed(&mut self, ts_ms: i64) -> Result<()> {
-        if ts_ms - self.last_flush_ms >= FLUSH_INTERVAL.as_millis() as i64 {
-            self.writer.flush().await?;
-            self.last_flush_ms = ts_ms;
-        }
         Ok(())
     }
 }
@@ -267,13 +272,24 @@ impl LocalTsdb {
         Ok(())
     }
 
+    pub async fn snapshot_current(&self) -> Result<()> {
+        let mut guard = self.current.lock().await;
+        if let Some(writer) = guard.as_mut() {
+            writer.writer.flush().await?;
+            let _ = writer.persist_index_files().await;
+        }
+        Ok(())
+    }
+
     pub async fn export_lines(
         &self,
         from_ms: Option<i64>,
         to_ms: Option<i64>,
         metrics: Option<&Vec<String>>,
     ) -> Result<Vec<String>> {
-        self.flush_current().await?;
+        // Flush buffered data and write index/metadata for the current block,
+        // but keep the writer open so we don't reset metadata within the same window.
+        let _ = self.snapshot_current().await;
         let blocks = self.list_blocks().await?;
         let mut out = Vec::new();
         for blk in blocks

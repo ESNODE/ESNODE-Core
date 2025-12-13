@@ -12,6 +12,7 @@ All notable changes to this project will be documented here.
 ## Unreleased
 - Fixed local TSDB default path for non-root runs by resolving to `$XDG_DATA_HOME/esnode/tsdb` or `~/.local/share/esnode/tsdb`, and now disable with a clear warning if initialization fails (resolves GitHub issue #2). Documented upgrade guidance in README and quickstart.
 - App collector now uses async HTTP with a 2s timeout to avoid blocking the scrape loop; CLI client uses a lightweight HTTP helper with timeouts to keep status/metrics fetches non-blocking even when endpoints hang.
+- TSDB export now snapshots the current block without closing it, preventing index resets and missing samples when exporting mid-window.
 - Add GitHub Actions release pipeline, packaging via `scripts/dist/esnode-core-release.sh`, and artifact checksums.
 - Expanded GPU/MIG telemetry, K8s compatibility labels, and NVML FFI scaffolding.
 - Added contributor documentation (CONTRIBUTING.md, CODE_OF_CONDUCT.md) and security policy.
