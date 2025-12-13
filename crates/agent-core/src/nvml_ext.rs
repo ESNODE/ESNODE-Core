@@ -5,15 +5,7 @@
 use nvml_wrapper_sys::bindings::*;
 
 #[cfg(all(feature = "gpu-nvml-ffi-ext", feature = "gpu"))]
-extern "C" {
-    fn nvmlDeviceGetPcieStats(device: nvmlDevice_t, counter: u32, value: *mut u32) -> nvmlReturn_t;
-    fn nvmlDeviceGetPcieReplayCounter(device: nvmlDevice_t, value: *mut u32) -> nvmlReturn_t;
-    fn nvmlDeviceGetFieldValues(
-        device: nvmlDevice_t,
-        valuesCount: u32,
-        values: *mut nvmlFieldValue_t,
-    ) -> nvmlReturn_t;
-}
+
 
 /// Errors from extended NVML calls.
 #[derive(thiserror::Error, Debug)]

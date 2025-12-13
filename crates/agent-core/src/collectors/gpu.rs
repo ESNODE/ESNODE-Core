@@ -38,55 +38,10 @@ use crate::state::{
 #[cfg(all(feature = "gpu", target_os = "linux"))]
 use nvml_wrapper::error::NvmlError;
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
-use nvml_wrapper_sys::bindings::{nvmlDevice_t, nvmlReturn_t};
+use nvml_wrapper_sys::bindings::*;
 
-#[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
-extern "C" {
-    fn nvmlDeviceGetGpuInstanceId(
-        device: nvmlDevice_t,
-        id: *mut std::os::raw::c_uint,
-    ) -> nvmlReturn_t;
-    fn nvmlDeviceGetComputeInstanceId(
-        device: nvmlDevice_t,
-        id: *mut std::os::raw::c_uint,
-    ) -> nvmlReturn_t;
-    fn nvmlGpuInstanceGetInfo(
-        gpuInstance: nvmlDevice_t,
-        info: *mut nvml_wrapper_sys::bindings::nvmlGpuInstanceInfo_t,
-    ) -> nvmlReturn_t;
-    fn nvmlComputeInstanceGetInfo(
-        computeInstance: nvmlDevice_t,
-        info: *mut nvml_wrapper_sys::bindings::nvmlComputeInstanceInfo_t,
-    ) -> nvmlReturn_t;
-    fn nvmlDeviceGetGpuInstanceById(
-        device: nvmlDevice_t,
-        id: std::os::raw::c_uint,
-        gpuInstance: *mut nvmlDevice_t,
-    ) -> nvmlReturn_t;
-    fn nvmlGpuInstanceGetComputeInstanceById(
-        gpuInstance: nvmlDevice_t,
-        id: std::os::raw::c_uint,
-        computeInstance: *mut nvmlDevice_t,
-    ) -> nvmlReturn_t;
-    fn nvmlDeviceGetMigMode(
-        device: nvmlDevice_t,
-        currentMode: *mut std::os::raw::c_uint,
-        pendingMode: *mut std::os::raw::c_uint,
-    ) -> nvmlReturn_t;
-    fn nvmlDeviceGetMaxMigDeviceCount(
-        device: nvmlDevice_t,
-        count: *mut std::os::raw::c_uint,
-    ) -> nvmlReturn_t;
-    fn nvmlDeviceGetMigDeviceHandleByIndex(
-        device: nvmlDevice_t,
-        index: std::os::raw::c_uint,
-        migDevice: *mut nvmlDevice_t,
-    ) -> nvmlReturn_t;
-    fn nvmlDeviceGetDeviceHandleFromMigDeviceHandle(
-        migDevice: nvmlDevice_t,
-        device: *mut nvmlDevice_t,
-    ) -> nvmlReturn_t;
-}
+
+
 
 pub struct GpuCollector {
     #[cfg(feature = "gpu")]

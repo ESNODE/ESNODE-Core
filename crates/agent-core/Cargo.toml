@@ -36,11 +36,11 @@ futures = "0.3"
 libc = "0.2"
 
 [dependencies.nvml-wrapper]
-version = "0.9"
+version = "0.10"
 optional = true
 
 [dependencies.nvml-wrapper-sys]
-version = "0.7"
+version = "0.8"
 optional = true
 
 [dependencies.esnode-orchestrator]
