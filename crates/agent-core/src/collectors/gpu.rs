@@ -911,7 +911,8 @@ impl Collector for GpuCollector {
                             }
                             for mig in &migs.devices {
                                 let mig_id_string = mig.id.to_string();
-                                let mig_label = mig.uuid.as_deref().unwrap_or(mig_id_string.as_str());
+                                let mig_label =
+                                    mig.uuid.as_deref().unwrap_or(mig_id_string.as_str());
                                 let compat_label = if self.k8s_mode {
                                     k8s_resource_name(
                                         self.resource_prefix,
@@ -1096,18 +1097,8 @@ impl Collector for GpuCollector {
                                 .with_label_values(&[uuid_label, gpu_label.as_str()])
                                 .set(if migs.supported { 1.0 } else { 0.0 });
                         }
-                    } else {
-                        metrics
-                            .gpu_mig_supported
-                            .with_label_values(&[uuid_label, gpu_label.as_str()])
-                            .set(0.0);
-                        metrics
-                            .gpu_mig_enabled
-                            .with_label_values(&[uuid_label, gpu_label.as_str()])
-                            .set(0.0);
                     }
-                        }
-                    }
+
                     #[cfg(not(all(feature = "gpu-nvml-ffi", feature = "gpu")))]
                     {
                         metrics
