@@ -224,6 +224,14 @@ pub struct MigDeviceStatus {
     pub profile: Option<String>,
     #[serde(default)]
     pub placement: Option<String>,
+    #[serde(default)]
+    pub bar1_total_bytes: Option<u64>,
+    #[serde(default)]
+    pub bar1_used_bytes: Option<u64>,
+    #[serde(default)]
+    pub ecc_corrected: Option<u64>,
+    #[serde(default)]
+    pub ecc_uncorrected: Option<u64>,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]

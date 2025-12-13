@@ -40,8 +40,38 @@ use nvml_wrapper::error::NvmlError;
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
 use nvml_wrapper_sys::bindings::{
     nvmlDeviceGetDeviceHandleFromMigDeviceHandle, nvmlDeviceGetMaxMigDeviceCount,
-    nvmlDeviceGetMigDeviceHandleByIndex, nvmlDeviceGetMigMode,
+    nvmlDeviceGetMigDeviceHandleByIndex, nvmlDeviceGetMigMode, nvmlDevice_t, nvmlReturn_t,
 };
+
+#[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
+extern "C" {
+    fn nvmlDeviceGetGpuInstanceId(
+        device: nvmlDevice_t,
+        id: *mut std::os::raw::c_uint,
+    ) -> nvmlReturn_t;
+    fn nvmlDeviceGetComputeInstanceId(
+        device: nvmlDevice_t,
+        id: *mut std::os::raw::c_uint,
+    ) -> nvmlReturn_t;
+    fn nvmlGpuInstanceGetInfo(
+        gpuInstance: nvmlDevice_t,
+        info: *mut nvml_wrapper_sys::bindings::nvmlGpuInstanceInfo_t,
+    ) -> nvmlReturn_t;
+    fn nvmlComputeInstanceGetInfo(
+        computeInstance: nvmlDevice_t,
+        info: *mut nvml_wrapper_sys::bindings::nvmlComputeInstanceInfo_t,
+    ) -> nvmlReturn_t;
+    fn nvmlDeviceGetGpuInstanceById(
+        device: nvmlDevice_t,
+        id: std::os::raw::c_uint,
+        gpuInstance: *mut nvmlDevice_t,
+    ) -> nvmlReturn_t;
+    fn nvmlGpuInstanceGetComputeInstanceById(
+        gpuInstance: nvmlDevice_t,
+        id: std::os::raw::c_uint,
+        computeInstance: *mut nvmlDevice_t,
+    ) -> nvmlReturn_t;
+}
 
 pub struct GpuCollector {
     #[cfg(feature = "gpu")]
@@ -987,11 +1017,8 @@ impl Collector for GpuCollector {
                                             .set(sm as f64);
                                     }
                                 }
-                                // Best-effort per-MIG ECC and BAR1 info using MIG device handle
-                                if let Ok(corrected) = mig
-                                    .device
-                                    .total_ecc_errors(MemoryError::Corrected, EccCounter::Volatile)
-                                {
+                                // Best-effort per-MIG ECC and BAR1 info using MigDeviceStatus fields
+                                if let Some(corrected) = mig.ecc_corrected {
                                     metrics
                                         .mig_ecc_corrected_total
                                         .with_label_values(&[
@@ -1011,10 +1038,7 @@ impl Collector for GpuCollector {
                                             .inc_by(corrected);
                                     }
                                 }
-                                if let Ok(uncorrected) = mig.device.total_ecc_errors(
-                                    MemoryError::Uncorrected,
-                                    EccCounter::Volatile,
-                                ) {
+                                if let Some(uncorrected) = mig.ecc_uncorrected {
                                     metrics
                                         .mig_ecc_uncorrected_total
                                         .with_label_values(&[
@@ -1034,7 +1058,9 @@ impl Collector for GpuCollector {
                                             .inc_by(uncorrected);
                                     }
                                 }
-                                if let Ok(bar1) = mig.device.bar1_memory_info() {
+                                if let (Some(total), Some(used)) =
+                                    (mig.bar1_total_bytes, mig.bar1_used_bytes)
+                                {
                                     metrics
                                         .mig_bar1_total_bytes
                                         .with_label_values(&[
@@ -1042,7 +1068,7 @@ impl Collector for GpuCollector {
                                             gpu_label.as_str(),
                                             mig_label,
                                         ])
-                                        .set(bar1.total as f64);
+                                        .set(total as f64);
                                     metrics
                                         .mig_bar1_used_bytes
                                         .with_label_values(&[
@@ -1050,7 +1076,7 @@ impl Collector for GpuCollector {
                                             gpu_label.as_str(),
                                             mig_label,
                                         ])
-                                        .set(bar1.used as f64);
+                                        .set(used as f64);
                                     if self.k8s_mode {
                                         metrics
                                             .mig_bar1_total_bytes
@@ -1059,7 +1085,7 @@ impl Collector for GpuCollector {
                                                 gpu_label.as_str(),
                                                 compat_label.as_str(),
                                             ])
-                                            .set(bar1.total as f64);
+                                            .set(total as f64);
                                         metrics
                                             .mig_bar1_used_bytes
                                             .with_label_values(&[
@@ -1067,7 +1093,7 @@ impl Collector for GpuCollector {
                                                 gpu_label.as_str(),
                                                 compat_label.as_str(),
                                             ])
-                                            .set(bar1.used as f64);
+                                            .set(used as f64);
                                     }
                                 }
                                 metrics
@@ -1204,7 +1230,7 @@ fn build_filter(raw: Option<&str>) -> Option<HashSet<String>> {
 
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
 fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<MigTree> {
-    use std::os::raw::{c_int, c_uint};
+    use std::os::raw::c_uint;
     let mut current_mode: c_uint = 0;
     let mut pending: c_uint = 0;
     let parent_handle = unsafe { parent.handle() };
@@ -1251,31 +1277,20 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
         let sm_count = mig_device.multi_processor_count().ok();
         let mut gi_id: c_uint = 0;
         let mut ci_id: c_uint = 0;
-        let _ = unsafe {
-            nvml_wrapper_sys::bindings::nvmlDeviceGetGpuInstanceId(mig_handle, &mut gi_id)
-        };
-        let _ = unsafe {
-            nvml_wrapper_sys::bindings::nvmlDeviceGetComputeInstanceId(mig_handle, &mut ci_id)
-        };
+        let _ = unsafe { nvmlDeviceGetGpuInstanceId(mig_handle, &mut gi_id) };
+        let _ = unsafe { nvmlDeviceGetComputeInstanceId(mig_handle, &mut ci_id) };
         // Populate GI info best-effort
         if gi_id > 0 && !gi_map.contains_key(&gi_id) {
             let mut gi_handle = std::ptr::null_mut();
-            if unsafe {
-                nvml_wrapper_sys::bindings::nvmlDeviceGetGpuInstanceById(
-                    parent_handle,
-                    gi_id,
-                    &mut gi_handle,
-                )
-            } == nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS
+            if unsafe { nvmlDeviceGetGpuInstanceById(parent_handle, gi_id, &mut gi_handle) }
+                == nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS
             {
                 let mut gi_info: nvml_wrapper_sys::bindings::nvmlGpuInstanceInfo_t =
                     unsafe { std::mem::zeroed() };
-                let _ = unsafe {
-                    nvml_wrapper_sys::bindings::nvmlGpuInstanceGetInfo(gi_handle, &mut gi_info)
-                };
+                let _ = unsafe { nvmlGpuInstanceGetInfo(gi_handle, &mut gi_info) };
                 let placement = Some(format!(
                     "{}:slice{}",
-                    gi_info.placement.sliceId, gi_info.placement.instanceSliceId
+                    gi_info.placement.start, gi_info.placement.size
                 ));
                 gi_map.insert(
                     gi_id,
@@ -1288,21 +1303,12 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
                 if ci_id > 0 {
                     let mut ci_handle = std::ptr::null_mut();
                     if unsafe {
-                        nvml_wrapper_sys::bindings::nvmlGpuInstanceGetComputeInstanceById(
-                            gi_handle,
-                            ci_id,
-                            &mut ci_handle,
-                        )
+                        nvmlGpuInstanceGetComputeInstanceById(gi_handle, ci_id, &mut ci_handle)
                     } == nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS
                     {
                         let mut ci_info: nvml_wrapper_sys::bindings::nvmlComputeInstanceInfo_t =
                             unsafe { std::mem::zeroed() };
-                        let _ = unsafe {
-                            nvml_wrapper_sys::bindings::nvmlComputeInstanceGetInfo(
-                                ci_handle,
-                                &mut ci_info,
-                            )
-                        };
+                        let _ = unsafe { nvmlComputeInstanceGetInfo(ci_handle, &mut ci_info) };
                         ci_nodes.push(ComputeInstanceNode {
                             gpu_instance_id: gi_id,
                             id: ci_id,
@@ -1310,7 +1316,7 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
                             eng_profile_id: Some(ci_info.engineProfile),
                             placement: Some(format!(
                                 "{}:slice{}",
-                                ci_info.placement.sliceId, ci_info.placement.instanceSliceId
+                                ci_info.placement.start, ci_info.placement.size
                             )),
                         });
                     }
@@ -1326,6 +1332,14 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
             .get(&gi_id)
             .and_then(|g| g.profile_id)
             .map(|p| p.to_string());
+        let ecc_corrected = mig_device
+            .total_ecc_errors(MemoryError::Corrected, EccCounter::Volatile)
+            .ok();
+        let ecc_uncorrected = mig_device
+            .total_ecc_errors(MemoryError::Uncorrected, EccCounter::Volatile)
+            .ok();
+        let bar1_info = mig_device.bar1_memory_info().ok();
+
         devices.push(MigDeviceStatus {
             id: mig_uuid.clone().unwrap_or(mig_id.clone()),
             uuid: mig_uuid,
@@ -1335,6 +1349,10 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
             sm_count,
             profile: profile_str,
             placement: Some(placement_str),
+            bar1_total_bytes: bar1_info.as_ref().map(|b| b.total),
+            bar1_used_bytes: bar1_info.map(|b| b.used),
+            ecc_corrected,
+            ecc_uncorrected,
         });
     }
 

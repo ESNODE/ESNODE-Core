@@ -4,6 +4,7 @@ pub mod config;
 mod event_worker;
 mod http;
 pub mod metrics;
+pub mod nvml_ext;
 pub mod state;
 pub mod tsdb;
 

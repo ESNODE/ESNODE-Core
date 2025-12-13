@@ -34,7 +34,10 @@ pub struct FieldValues {
 
 impl FieldValues {
     pub fn get(&self, id: u32) -> Option<i64> {
-        self.values.iter().find(|(fid, _)| *fid == id).map(|(_, v)| *v)
+        self.values
+            .iter()
+            .find(|(fid, _)| *fid == id)
+            .map(|(_, v)| *v)
     }
 }
 
@@ -99,11 +102,7 @@ pub fn get_field_values(
         for (i, f) in field_ids.iter().enumerate() {
             fields[i].fieldId = *f;
         }
-        let ret = nvmlDeviceGetFieldValues(
-            device,
-            fields.len() as u32,
-            fields.as_mut_ptr(),
-        );
+        let ret = nvmlDeviceGetFieldValues(device, fields.len() as u32, fields.as_mut_ptr());
         if ret != nvmlReturn_enum_NVML_SUCCESS {
             return Err(NvmlExtError::NvmlReturn(ret as i32));
         }
