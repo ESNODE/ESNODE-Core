@@ -374,6 +374,7 @@ fn command_status(client: &AgentClient, no_color: bool) -> Result<()> {
     let _ = no_color;
     let snapshot = client.fetch_status()?;
     let mut out = String::new();
+    out.push_str("Node status\n");
     out.push_str("ESNODE status (basic profile)\n");
     out.push_str(&format!(
         "  Healthy: {}\n",

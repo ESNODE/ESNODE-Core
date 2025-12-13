@@ -1,9 +1,8 @@
 // ESNODE | Source Available BUSL-1.1 | Copyright (c) 2024 Estimatedstocks AB
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use tracing::{debug, warn};
-use ureq;
 
 use crate::collectors::Collector;
 use crate::metrics::MetricsRegistry;
@@ -16,10 +15,15 @@ pub struct AppCollector {
     last_ts: Option<Instant>,
     warned: bool,
     agent_label: String,
+    client: reqwest::Client,
 }
 
 impl AppCollector {
     pub fn new(status: StatusState, url: String, agent_label: String) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         AppCollector {
             url,
             status,
@@ -27,12 +31,14 @@ impl AppCollector {
             last_ts: None,
             warned: false,
             agent_label,
+            client,
         }
     }
 
-    fn fetch_metrics(&self) -> Option<String> {
-        match ureq::get(&self.url).call() {
-            Ok(resp) => resp.into_string().ok(),
+    async fn fetch_metrics(&self) -> Option<String> {
+        let resp = self.client.get(&self.url).send().await;
+        match resp {
+            Ok(r) => r.text().await.ok(),
             Err(e) => {
                 debug!("Failed to fetch app metrics from {}: {}", self.url, e);
                 None
@@ -82,7 +88,7 @@ impl Collector for AppCollector {
     }
 
     async fn collect(&mut self, metrics: &MetricsRegistry) -> anyhow::Result<()> {
-        let Some(body) = self.fetch_metrics() else {
+        let Some(body) = self.fetch_metrics().await else {
             if !self.warned {
                 warn!("App metrics endpoint unreachable at {}", self.url);
                 self.warned = true;

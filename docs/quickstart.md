@@ -145,6 +145,10 @@ ESNODE_CONFIG=/etc/esnode/esnode.toml esnode-core
 
 Note on TSDB path: by default the agent now resolves `local_tsdb_path` to `$XDG_DATA_HOME/esnode/tsdb` or `~/.local/share/esnode/tsdb` to avoid root-only directories. If you prefer `/var/lib/esnode/tsdb`, set it explicitly and pre-create the directory with writable permissions for the agent user.
 
+App collector timeout: the app/model metrics collector uses a 2s HTTP timeout to avoid blocking other collectors; slow/hung endpoints will be skipped for that interval and logged once.
+
+CLI note: `esnode-core status/metrics` uses a lightweight HTTP client with a 2s connect/read timeout to avoid hanging when the agent endpoint is slow.
+
 ### 3.2 Common CLI flags (suggested)
 
 > The exact flag names may differ depending on your implementation. Example:

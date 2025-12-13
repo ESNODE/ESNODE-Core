@@ -1,6 +1,10 @@
 // ESNODE | Source Available BUSL-1.1 | Copyright (c) 2024 Estimatedstocks AB
 use agent_core::state::StatusSnapshot;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
+use url::Url;
 
 /// Lightweight HTTP client for talking to the local agent without external deps.
 pub struct AgentClient {
@@ -25,49 +29,84 @@ impl AgentClient {
     }
 
     pub fn fetch_status(&self) -> Result<StatusSnapshot> {
-        let url = format!("{}/status", self.base_url);
-        let body = ureq::get(&url)
-            .call()
-            .context("requesting /status")?
-            .into_string()
-            .context("reading /status body")?;
+        let (status, body) = self.http_get("/status")?;
+        if status == 404 {
+            return Err(anyhow!("requesting /status: 404"));
+        }
         let snapshot: StatusSnapshot =
             serde_json::from_str(&body).context("parsing status JSON")?;
         Ok(snapshot)
     }
 
     pub fn fetch_metrics_text(&self) -> Result<String> {
-        let url = format!("{}/metrics", self.base_url);
-        let body = ureq::get(&url)
-            .call()
-            .context("requesting /metrics")?
-            .into_string()
-            .context("reading /metrics body")?;
+        let (status, body) = self.http_get("/metrics")?;
+        if status == 404 {
+            return Err(anyhow!("requesting /metrics: 404"));
+        }
         Ok(body)
     }
 
     pub fn fetch_orchestrator_metrics(&self) -> Result<esnode_orchestrator::PubMetrics> {
-        let url = format!("{}/orchestrator/metrics", self.base_url);
-        let resp = ureq::get(&url).call();
-        match resp {
-            Ok(r) => {
-                let body = r
-                    .into_string()
-                    .context("reading /orchestrator/metrics body")?;
-                let metrics: esnode_orchestrator::PubMetrics =
-                    serde_json::from_str(&body).context("parsing orchestrator metrics")?;
-                Ok(metrics)
-            }
-            Err(ureq::Error::Status(404, _)) => {
-                // If 404, it means orchestrator is disabled. Return default/empty.
-                Ok(esnode_orchestrator::PubMetrics {
-                    device_count: 0,
-                    pending_tasks: 0,
-                    devices: vec![],
-                })
-            }
-            Err(e) => Err(anyhow::anyhow!("request failed: {}", e)),
+        let (status, body) = self.http_get("/orchestrator/metrics")?;
+        if status == 404 {
+            return Ok(esnode_orchestrator::PubMetrics {
+                device_count: 0,
+                pending_tasks: 0,
+                devices: vec![],
+            });
         }
+        let metrics: esnode_orchestrator::PubMetrics =
+            serde_json::from_str(&body).context("parsing orchestrator metrics")?;
+        Ok(metrics)
+    }
+
+    fn http_get(&self, path: &str) -> Result<(u16, String)> {
+        let url = Url::parse(&format!("{}{}", self.base_url, path)).context("parsing URL")?;
+        let host = url
+            .host_str()
+            .ok_or_else(|| anyhow!("missing host in {}", url))?;
+        let port = url.port_or_known_default().unwrap_or(80);
+        let addr: SocketAddr = format!("{}:{}", host, port)
+            .parse()
+            .context("resolving address")?;
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+            .context("connecting to agent")?;
+        stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+        stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
+        let req = format!(
+            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            url.path(),
+            host
+        );
+        stream
+            .write_all(req.as_bytes())
+            .context("sending request")?;
+        let _ = stream.flush();
+
+        let mut resp_bytes = Vec::new();
+        let mut buf = [0u8; 1024];
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => resp_bytes.extend_from_slice(&buf[..n]),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset => {
+                    // Use whatever we managed to read before reset.
+                    break;
+                }
+                Err(e) => return Err(e).context("reading response"),
+            }
+        }
+        let resp = String::from_utf8_lossy(&resp_bytes).to_string();
+        let mut parts = resp.splitn(2, "\r\n\r\n");
+        let status_line = parts.next().unwrap_or("");
+        let body = parts.next().unwrap_or("").to_string();
+        let status = status_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(0);
+        Ok((status, body))
     }
 }
 
