@@ -40,7 +40,7 @@ use nvml_wrapper::error::NvmlError;
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
 use nvml_wrapper_sys::bindings::{
     nvmlDeviceGetDeviceHandleFromMigDeviceHandle, nvmlDeviceGetMaxMigDeviceCount,
-    nvmlDeviceGetMigDeviceHandleByIndex, nvmlDeviceGetMigMode, nvmlReturn_t, nvmlDevice_t,
+    nvmlDeviceGetMigDeviceHandleByIndex, nvmlDeviceGetMigMode, nvmlDevice_t, nvmlReturn_t,
 };
 
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
