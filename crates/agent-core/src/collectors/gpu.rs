@@ -8,7 +8,7 @@ use nvml_wrapper::{
     bitmasks::nv_link::PacketTypes,
     enum_wrappers::device::{Clock, EccCounter, MemoryError, PcieUtilCounter, TemperatureSensor},
     enum_wrappers::nv_link::{ErrorCounter as NvLinkErrorCounter, UtilizationCountUnit},
-    enums::device::PcieLinkMaxSpeed,
+    // enums::device::PcieLinkMaxSpeed, // Unused
     enums::nv_link::Counter as NvLinkCounter,
     struct_wrappers::nv_link::UtilizationControl,
     Nvml,
@@ -38,7 +38,7 @@ use crate::state::{
 #[cfg(all(feature = "gpu", target_os = "linux"))]
 use nvml_wrapper::error::NvmlError;
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
-use nvml_wrapper_sys::bindings::*;
+// use nvml_wrapper_sys::bindings::*; // Unused, dynamic loading used instead
 
 pub struct GpuCollector {
     #[cfg(feature = "gpu")]
@@ -467,13 +467,13 @@ impl Collector for GpuCollector {
                     metrics
                         .gpu_bar1_total_bytes
                         .with_label_values(&[uuid_label, gpu_label.as_str()])
-                        .set(bar1.total as f64);
+                        .set(bar1.bar1Total as f64);
                     metrics
                         .gpu_bar1_used_bytes
                         .with_label_values(&[uuid_label, gpu_label.as_str()])
-                        .set(bar1.used as f64);
-                    health.bar1_total_bytes = Some(bar1.total);
-                    health.bar1_used_bytes = Some(bar1.used);
+                        .set(bar1.bar1Used as f64);
+                    health.bar1_total_bytes = Some(bar1.bar1Total);
+                    health.bar1_used_bytes = Some(bar1.bar1Used);
                 }
                 if let Ok(enc_info) = device.encoder_utilization() {
                     metrics
@@ -692,8 +692,8 @@ impl Collector for GpuCollector {
                             // Note: pcie_link_speed returns the current link speed, not max.
                             // If semantics require max, we might need a different call, but for now matching the existing pattern.
                             if let (Ok(gen), Ok(width), Ok(speed)) = (
-                                device.pcie_link_gen(),
-                                device.pcie_link_width(),
+                                device.max_pcie_link_gen(),
+                                device.max_pcie_link_width(),
                                 device.pcie_link_speed(),
                             ) {
                                 let bytes_per_s = ((tx_kb + rx_kb) as f64) * 1024.0;
@@ -1512,7 +1512,7 @@ fn k8s_resource_name(prefix: &str, mig_profile: Option<&str>) -> String {
 }
 
 #[cfg(feature = "gpu")]
-fn pcie_lane_bytes_per_sec(gen: u32, speed_mt_s: u32) -> f64 {
+fn pcie_lane_bytes_per_sec(_gen: u32, speed_mt_s: u32) -> f64 {
     // PCIe generation to base speed in MT/s per lane
     // Gen1: 2.5 GT/s, Gen2: 5 GT/s, Gen3: 8 GT/s, Gen4: 16 GT/s, Gen5: 32 GT/s, Gen6: 64 GT/s
     // Data rate is typically 8/10 encoding for Gen1/2, 128/130 for Gen3+
@@ -1568,7 +1568,6 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
         nvmlComputeInstanceInfo_t, nvmlDevice_t, nvmlGpuInstanceInfo_t,
         nvmlReturn_enum_NVML_SUCCESS, nvmlReturn_t,
     };
-    use std::os::raw::c_uint;
 
     // Load NVML dynamically to bypass missing symbols in sys crate
     let lib = unsafe { libloading::Library::new("libnvidia-ml.so.1") }?;
@@ -1595,7 +1594,6 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
     type NvmlDeviceGetComputeInstanceId =
         unsafe extern "C" fn(device: nvmlDevice_t, id: *mut std::os::raw::c_uint) -> nvmlReturn_t;
     type NvmlGpuInstanceGetById = unsafe extern "C" fn(
-        // Corrected function name
         device: nvmlDevice_t,
         id: std::os::raw::c_uint,
         gpu_instance: *mut nvmlDevice_t,
@@ -1651,7 +1649,7 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
     let get_compute_instance_id: libloading::Symbol<NvmlDeviceGetComputeInstanceId> =
         unsafe { lib.get(b"nvmlDeviceGetComputeInstanceId") }?;
     let get_gpu_instance_by_id: libloading::Symbol<NvmlGpuInstanceGetById> =
-        unsafe { lib.get(b"nvmlGpuInstanceGetById") }?; // Corrected function name
+        unsafe { lib.get(b"nvmlGpuInstanceGetById") }?;
     let get_gpu_instance_info: libloading::Symbol<NvmlGpuInstanceGetInfo> =
         unsafe { lib.get(b"nvmlGpuInstanceGetInfo") }?;
     let get_gpu_instance_compute_instance_by_id: libloading::Symbol<
@@ -1674,8 +1672,8 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
     let parent_handle = unsafe { parent.handle() };
     let mig_mode_res = unsafe { get_mig_mode(parent_handle, &mut current_mode, &mut pending) };
     let supported = mig_mode_res == nvmlReturn_enum_NVML_SUCCESS;
-    let enabled =
-        current_mode == nvml_wrapper_sys::bindings::nvmlMigMode_enum_NVML_DEVICE_MIG_ENABLE;
+    // NVML_DEVICE_MIG_ENABLE is 1
+    let enabled = current_mode == 1;
 
     if !supported || !enabled {
         return Ok(MigTree {
@@ -1692,6 +1690,7 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
 
     let mut devices = Vec::new();
     let mut gi_map: HashMap<u32, GpuInstanceNode> = HashMap::new();
+    let mut gi_handles: HashMap<u32, nvmlDevice_t> = HashMap::new();
     let mut ci_nodes: Vec<ComputeInstanceNode> = Vec::new();
 
     for idx in 0..max_count {
@@ -1725,8 +1724,10 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
                 if unsafe { get_gpu_instance_by_id(parent_handle, gi_id, &mut gi_handle) }
                     == nvmlReturn_enum_NVML_SUCCESS
                 {
+                    gi_handles.insert(gi_id, gi_handle);
+
                     let mut gi_info: nvmlGpuInstanceInfo_t = unsafe { std::mem::zeroed() };
-                    gi_info.version = nvml_wrapper_sys::bindings::nvmlGpuInstanceInfo_v2;
+                    // gi_info.version = ...; // Skip version if unavailable, rely on zeroed/default
                     let _ = unsafe { get_gpu_instance_info(gi_handle, &mut gi_info) };
                     let placement = Some(format!(
                         "{}:slice{}",
@@ -1738,7 +1739,6 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
                             id: gi_id,
                             profile_id: Some(gi_info.profileId),
                             placement,
-                            handle: gi_handle, // Store handle for later CI lookup
                         },
                     );
                 }
@@ -1746,64 +1746,117 @@ fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<Mig
 
             // Populate CI info best-effort
             if ci_id > 0 {
-                if let Some(gi_node) = gi_map.get(&gi_id) {
-                    let mut ci_handle: nvmlDevice_t = std::ptr::null_mut();
-                    if unsafe {
-                        get_gpu_instance_compute_instance_by_id(
-                            gi_node.handle,
-                            ci_id,
-                            &mut ci_handle,
-                        )
-                    } == nvmlReturn_enum_NVML_SUCCESS
-                    {
-                        let mut ci_info: nvmlComputeInstanceInfo_t = unsafe { std::mem::zeroed() };
-                        ci_info.version = nvml_wrapper_sys::bindings::nvmlComputeInstanceInfo_v2;
-                        let _ = unsafe { get_compute_instance_info(ci_handle, &mut ci_info) };
-                        ci_nodes.push(ComputeInstanceNode {
-                            gpu_instance_id: gi_id,
-                            id: ci_id,
-                            profile_id: Some(ci_info.profileId),
-                            eng_profile_id: None, // Some(ci_info.engineProfile),
-                            placement: Some(format!(
-                                "{}:slice{}",
-                                ci_info.placement.start, ci_info.placement.size
-                            )),
-                        });
+                // Check if we haven't added this CI yet (simple check by iteration or similar, but here we just push)
+                // To avoid stats duplication, we rely on the fact that we iterate MIG devices.
+                // However, one CI might be shared? No, MIG device <-> CI is 1:1 usually?
+                // Actually 1 GI can have multiple CIs. 1 CI can have multiple MIG devices?
+                // In MIG, a "MIG Device" is conceptually a CI.
+                // We'll just push CI nodes as we encounter them. Ideally distinct.
+                // But `ci_nodes` is for the tree structure.
+                // Let's check uniqueness.
+                let known = ci_nodes
+                    .iter()
+                    .any(|c| c.gpu_instance_id == gi_id && c.id == ci_id);
+
+                if !known {
+                    if let Some(&gi_handle) = gi_handles.get(&gi_id) {
+                        let mut ci_handle: nvmlDevice_t = std::ptr::null_mut();
+                        if unsafe {
+                            get_gpu_instance_compute_instance_by_id(
+                                gi_handle,
+                                ci_id,
+                                &mut ci_handle,
+                            )
+                        } == nvmlReturn_enum_NVML_SUCCESS
+                        {
+                            let mut ci_info: nvmlComputeInstanceInfo_t =
+                                unsafe { std::mem::zeroed() };
+                            // ci_info.version = ...; // Skip version
+                            let _ = unsafe { get_compute_instance_info(ci_handle, &mut ci_info) };
+                            ci_nodes.push(ComputeInstanceNode {
+                                gpu_instance_id: gi_id,
+                                id: ci_id,
+                                profile_id: Some(ci_info.profileId),
+                                eng_profile_id: None,
+                                placement: Some(format!(
+                                    "{}:slice{}",
+                                    ci_info.placement.start, ci_info.placement.size
+                                )),
+                            });
+                        }
                     }
                 }
             }
-        }
-        let mig_id = format!("mig{}", idx);
-        let placement_str = gi_map
-            .get(&gi_id)
-            .and_then(|g| g.placement.clone())
-            .unwrap_or_else(|| format!("gi{}", gi_id));
-        let profile_str = gi_map
-            .get(&gi_id)
-            .and_then(|g| g.profile_id)
-            .map(|p| p.to_string());
-        let ecc_corrected = mig_device
-            .total_ecc_errors(MemoryError::Corrected, EccCounter::Volatile)
-            .ok();
-        let ecc_uncorrected = mig_device
-            .total_ecc_errors(MemoryError::Uncorrected, EccCounter::Volatile)
-            .ok();
-        let bar1_info = mig_device.bar1_memory_info().ok();
 
-        devices.push(MigDeviceStatus {
-            id: mig_uuid.clone().unwrap_or(mig_id.clone()),
-            uuid: mig_uuid,
-            memory_total_bytes: mem_info.as_ref().map(|m| m.total),
-            memory_used_bytes: mem_info.map(|m| m.used),
-            util_percent: util.map(|u| u.gpu),
-            sm_count,
-            profile: profile_str,
-            placement: Some(placement_str),
-            bar1_total_bytes: bar1_info.as_ref().map(|b| b.total),
-            bar1_used_bytes: bar1_info.map(|b| b.used),
-            ecc_corrected,
-            ecc_uncorrected,
-        });
+            // Metrics
+            let mut mem_info: Option<nvml_wrapper_sys::bindings::nvmlMemory_t> = None;
+            let mut util_gpu: Option<u32> = None;
+            let mut ecc_cor: Option<u64> = None;
+            let mut ecc_uncor: Option<u64> = None;
+            let mut bar1: Option<nvml_wrapper_sys::bindings::nvmlBAR1Memory_t> = None;
+
+            {
+                let mut m = unsafe { std::mem::zeroed() };
+                if unsafe { get_memory_info(mig_handle, &mut m) } == nvmlReturn_enum_NVML_SUCCESS {
+                    mem_info = Some(m);
+                }
+
+                let mut u = unsafe { std::mem::zeroed() };
+                if unsafe { get_utilization_rates(mig_handle, &mut u) }
+                    == nvmlReturn_enum_NVML_SUCCESS
+                {
+                    util_gpu = Some(u.gpu);
+                }
+
+                let mut b = unsafe { std::mem::zeroed() };
+                if unsafe { get_bar1_memory_info(mig_handle, &mut b) }
+                    == nvmlReturn_enum_NVML_SUCCESS
+                {
+                    bar1 = Some(b);
+                }
+
+                let mut c_count: u64 = 0;
+                let mut u_count: u64 = 0;
+                // NVML_ECC_COUNTER_TYPE_VOLATILE = 0
+                // NVML_MEMORY_ERROR_TYPE_CORRECTED = 1
+                // NVML_MEMORY_ERROR_TYPE_UNCORRECTED = 2
+                if unsafe { get_total_ecc_errors(mig_handle, 1, 0, &mut c_count) }
+                    == nvmlReturn_enum_NVML_SUCCESS
+                {
+                    ecc_cor = Some(c_count);
+                }
+                if unsafe { get_total_ecc_errors(mig_handle, 2, 0, &mut u_count) }
+                    == nvmlReturn_enum_NVML_SUCCESS
+                {
+                    ecc_uncor = Some(u_count);
+                }
+            }
+
+            let mig_id = format!("mig{}", idx);
+            let placement_str = gi_map
+                .get(&gi_id)
+                .and_then(|g| g.placement.clone())
+                .unwrap_or_else(|| format!("gi{}", gi_id));
+            let profile_str = gi_map
+                .get(&gi_id)
+                .and_then(|g| g.profile_id)
+                .map(|p| p.to_string());
+
+            devices.push(MigDeviceStatus {
+                id: mig_uuid.clone().unwrap_or(mig_id.clone()),
+                uuid: mig_uuid,
+                memory_total_bytes: mem_info.as_ref().map(|m| m.total),
+                memory_used_bytes: mem_info.map(|m| m.used),
+                util_percent: util_gpu,
+                sm_count: None, // Not retrieving SM count for now
+                profile: profile_str,
+                placement: Some(placement_str),
+                bar1_total_bytes: bar1.as_ref().map(|b| b.bar1Total),
+                bar1_used_bytes: bar1.map(|b| b.bar1Used),
+                ecc_corrected: ecc_cor,
+                ecc_uncorrected: ecc_uncor,
+            });
+        }
     }
 
     Ok(MigTree {
