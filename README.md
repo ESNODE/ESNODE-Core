@@ -157,9 +157,23 @@ Example commands (adjust version/OS paths):
 - ESNODE-Pulse binaries must not be mirrored to the public distribution paths; see the private repository for build details.
 
 ## Deployment artifacts
-- Docker: `deploy/docker/Dockerfile`
+- Docker: `Dockerfile` (builds from `public/distribution/releases/linux-amd64/esnode-core-0.1.0-linux-amd64.tar.gz`)
 - systemd: `deploy/systemd/esnode-core.service`
 - Kubernetes DaemonSet: `deploy/k8s/daemonset.yaml`
+
+## Kubernetes deploy (operators & developers)
+- Build/pull image: `docker build -t myregistry/esnode-core:0.1.0 -f Dockerfile .` (uses `public/distribution/releases/linux-amd64/esnode-core-0.1.0-linux-amd64.tar.gz`).
+- Apply manifests (headless service + ConfigMap + DaemonSet):
+  ```bash
+  kubectl apply --dry-run=client -f deploy/k8s/esnode-configmap.yaml
+  kubectl apply --dry-run=client -f deploy/k8s/esnode-service.yaml
+  kubectl apply --dry-run=client -f deploy/k8s/esnode-daemonset.yaml
+  kubectl apply -f deploy/k8s/
+  ```
+- ConfigMap (`esnode.toml`) uses loopback-only orchestrator by default, enables TSDB at `/var/lib/esnode/tsdb` (hostPath volume), and keeps collectors on.
+- DaemonSet runs hostNetwork+hostPID, privileged for NVML access, and mounts `/dev` plus TSDB hostPath. Probes hit `/healthz`; port 9100 is exposed via headless Service for scraping.
+- Override `image:` and namespace as needed; set `local_tsdb_path` to match your volume; set `orchestrator.token` and `allow_public` only when intentionally exposing the control API.
+- If building multi-arch images, supply the matching tarball for each arch (e.g., `linux-arm64`); current Dockerfile targets `linux-amd64`.
 
 ## Documentation
 - Quickstart: `docs/quickstart.md`
@@ -168,3 +182,34 @@ Example commands (adjust version/OS paths):
 - Architecture: `docs/architecture.md`
 - Platform matrix: `docs/platform-matrix.md`
 - Smoke test script: `scripts/smoke.sh` (builds, runs core+pulse locally, curls endpoints)
+
+## Kubernetes Deployment
+
+ESNODE-Core is designed to run as a DaemonSet on Kubernetes, providing monitoring for each node.
+
+### Artifacts
+
+- **Docker Image**: `myregistry/esnode-core:0.1.0` (Replace `myregistry` with your actual registry)
+- **Release Tarball**: [esnode-core-0.1.0-linux-amd64.tar.gz](./public/distribution/releases/linux-amd64/esnode-core-0.1.0-linux-amd64.tar.gz)
+- **Checksum**: `public/distribution/releases/linux-amd64/esnode-core-0.1.0-linux-amd64.tar.gz.sha256`
+
+### Deployment Steps
+
+1.  **Configure**: Edit `deploy/k8s/esnode-configmap.yaml` to adjust `esnode.toml` settings (e.g., specific orchestrator URL).
+2.  **Appply Manifests**:
+
+    ```bash
+    kubectl apply -f deploy/k8s/esnode-configmap.yaml
+    kubectl apply -f deploy/k8s/esnode-daemonset.yaml
+    kubectl apply -f deploy/k8s/esnode-service.yaml
+    ```
+
+### Requirements
+
+The DaemonSet automatically requests privileges for hardware monitoring:
+- `privileged: true` security context
+- `hostPID: true` for process monitoring
+- `hostNetwork: true` (optional, but recommended for agent connectivity)
+- `/dev` and `/proc` mounts
+
+Ensure your nodes support these capabilities. For GPU monitoring, the DaemonSet sets `NVIDIA_VISIBLE_DEVICES=all`.

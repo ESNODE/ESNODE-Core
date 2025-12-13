@@ -194,6 +194,33 @@ Degradation & status surfaces:
 
 Developer tip:
 - `cargo test --workspace` includes a ratatui-backed render smoke test for the TUI; no PTY needed to validate layout rendering.
+
+## Docker & Kubernetes builds
+
+### Build a container image (linux/amd64)
+```bash
+docker build -t myregistry/esnode-core:0.1.0 -f Dockerfile .
+# Image pulls binary from public/distribution/releases/linux-amd64/esnode-core-0.1.0-linux-amd64.tar.gz
+```
+
+### Kubernetes manifests (DaemonSet)
+Manifests live in `deploy/k8s/`:
+- `esnode-configmap.yaml` – default `esnode.toml` (loopback-only orchestrator, TSDB at `/var/lib/esnode/tsdb`, collectors on).
+- `esnode-daemonset.yaml` – hostNetwork/hostPID, privileged for NVML access, mounts `/dev` and TSDB hostPath, adds liveness/readiness probes.
+- `esnode-service.yaml` – headless Service for `/metrics` scraping on port 9100.
+
+Validate/apply (requires cluster access):
+```bash
+kubectl apply --dry-run=client -f deploy/k8s/esnode-configmap.yaml
+kubectl apply --dry-run=client -f deploy/k8s/esnode-service.yaml
+kubectl apply --dry-run=client -f deploy/k8s/esnode-daemonset.yaml
+kubectl apply -f deploy/k8s/
+```
+
+Notes:
+- Set `image:` to your registry/tag; provide matching tarball per arch if building multi-arch images.
+- Keep `orchestrator.allow_public=false` unless intentionally exposing control APIs; set `orchestrator.token` when enabling public exposure.
+- Adjust `local_tsdb_path` to match your volume and permissions; defaults to `/var/lib/esnode/tsdb` in the manifest.
 ```
 
 Common control-plane commands:
