@@ -61,9 +61,6 @@ pub mod field {
     pub const FI_DEV_PCIE_OUTBOUND_ATOMICS_MASK: u32 = 228;
     pub const FI_DEV_PCIE_INBOUND_ATOMICS_MASK: u32 = 229;
 }
-
-
-
 #[cfg(all(feature = "gpu-nvml-ffi-ext", feature = "gpu"))]
 pub unsafe fn pcie_ext_counters(device: nvmlDevice_t) -> Result<PcieExt, NvmlExtError> {
     // nvmlDeviceGetPcieReplayCounter is already available in wrapper; here we try best-effort extras.

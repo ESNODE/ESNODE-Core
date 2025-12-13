@@ -678,8 +678,7 @@ impl Collector for GpuCollector {
                             .with_label_values(&[uuid_label, gpu_label.as_str()])
                             .inc_by(uncorrectable);
                     }
-                    if let Ok(ext) =
-                        unsafe { crate::nvml_ext::pcie_ext_counters(device.handle()) }
+                    if let Ok(ext) = unsafe { crate::nvml_ext::pcie_ext_counters(device.handle()) }
                     {
                         if let Some(c) = ext.correctable_errors {
                             metrics
