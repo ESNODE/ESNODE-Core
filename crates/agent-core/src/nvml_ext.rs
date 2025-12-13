@@ -61,6 +61,12 @@ pub mod field {
     pub const FI_DEV_PCIE_OUTBOUND_ATOMICS_MASK: u32 = 228;
     pub const FI_DEV_PCIE_INBOUND_ATOMICS_MASK: u32 = 229;
 }
+/// Best-effort PCIe extended counters.
+///
+/// # Safety
+///
+/// This function dereferences the provided `device` raw pointer to call into NVML via FFI.
+/// The caller must ensure `device` is a valid `nvmlDevice_t` obtained from `nvml_wrapper`.
 #[cfg(all(feature = "gpu-nvml-ffi-ext", feature = "gpu"))]
 pub unsafe fn pcie_ext_counters(device: nvmlDevice_t) -> Result<PcieExt, NvmlExtError> {
     // nvmlDeviceGetPcieReplayCounter is already available in wrapper; here we try best-effort extras.
@@ -93,6 +99,12 @@ pub fn nvswitch_ext_counters(_device: nvmlDevice_t) -> Result<NvSwitchExt, NvmlE
     Err(NvmlExtError::NotSupported)
 }
 
+/// Query values for specific NVML field IDs.
+///
+/// # Safety
+///
+/// This function dereferences the provided `device` raw pointer to call into NVML via FFI.
+/// The caller must ensure `device` is a valid `nvmlDevice_t`.
 #[cfg(all(feature = "gpu-nvml-ffi-ext", feature = "gpu"))]
 pub unsafe fn get_field_values(
     device: nvmlDevice_t,
