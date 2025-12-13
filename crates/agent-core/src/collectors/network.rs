@@ -25,6 +25,7 @@ pub struct NetworkCollector {
     previous: HashMap<String, NetworkSnapshot>,
     status: StatusState,
     prev_instant: Option<std::time::Instant>,
+    prev_tcp_retrans: Option<u64>,
 }
 
 impl NetworkCollector {
@@ -35,6 +36,7 @@ impl NetworkCollector {
             previous: HashMap::new(),
             status,
             prev_instant: None,
+            prev_tcp_retrans: None,
         }
     }
 }
@@ -128,6 +130,16 @@ impl Collector for NetworkCollector {
                     .network_tx_dropped_total
                     .with_label_values(&[iface.as_str()])
                     .inc_by(txd);
+                let drop_flag = (rxd + txd) > 0;
+                metrics
+                    .network_degradation_drops
+                    .with_label_values(&[iface.as_str()])
+                    .set(if drop_flag { 1.0 } else { 0.0 });
+                let degrade = (rxd + txd) > 0;
+                metrics
+                    .network_degradation_drops
+                    .with_label_values(&[iface.as_str()])
+                    .set(if degrade { 1.0 } else { 0.0 });
 
                 let mut snap = *prev;
                 snap.rx_packets = v.rx_packets;
@@ -165,6 +177,27 @@ impl Collector for NetworkCollector {
                 .set_network_summary(Some(iface), rx_per_s, tx_per_s, drops_per_s);
         } else {
             self.status.set_network_summary(None, None, None, None);
+        }
+        // Mark degradation if any interface saw drops
+        let any_drops = self
+            .previous
+            .iter()
+            .any(|(_, snap)| snap.rx_dropped > 0 || snap.tx_dropped > 0);
+        self.status.set_network_degraded(any_drops);
+
+        // TCP retransmissions from /proc/net/netstat (TCPSegRetrans)
+        if let Some(retrans_total) = read_tcp_retrans() {
+            if let Some(prev) = self.prev_tcp_retrans {
+                let delta = retrans_total.saturating_sub(prev);
+                metrics.network_tcp_retrans_total.inc_by(delta);
+                metrics
+                    .network_degradation_retrans
+                    .set(if delta > 0 { 1.0 } else { 0.0 });
+                if delta > 0 {
+                    self.status.set_network_degraded(true);
+                }
+            }
+            self.prev_tcp_retrans = Some(retrans_total);
         }
 
         Ok(())
@@ -204,4 +237,23 @@ fn read_netdev() -> Option<HashMap<String, NetDevVals>> {
         }
     }
     Some(map)
+}
+
+fn read_tcp_retrans() -> Option<u64> {
+    let s = fs::read_to_string("/proc/net/netstat").ok()?;
+    let mut header: Option<String> = None;
+    let mut values: Option<String> = None;
+    for line in s.lines() {
+        if line.starts_with("TcpExt:") {
+            header = Some(line.to_string());
+        } else if line.starts_with("TcpExt ") {
+            values = Some(line.to_string());
+        }
+    }
+    let header = header?;
+    let values = values?;
+    let keys: Vec<&str> = header.split_whitespace().collect();
+    let vals: Vec<&str> = values.split_whitespace().collect();
+    let idx = keys.iter().position(|k| *k == "TCPSegRetrans")?;
+    vals.get(idx)?.parse().ok()
 }

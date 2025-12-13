@@ -1,6 +1,7 @@
 // ESNODE | Source Available BUSL-1.1 | Copyright (c) 2025 Estimatedstocks AB
 use axum::{
     extract::{Json, State},
+    http::StatusCode,
     routing::{get, post},
     Router,
 };
@@ -71,6 +72,10 @@ pub struct OrchestratorConfig {
     /// Default is false; agents bind to loopback-only for orchestrator routes unless explicitly allowed.
     #[serde(default)]
     pub allow_public: bool,
+    /// Optional bearer token required for /orchestrator/* control API.
+    /// When set, requests must include `Authorization: Bearer <token>`.
+    #[serde(default)]
+    pub token: Option<String>,
     // Compute Loop
     pub enable_zombie_reaper: bool,
     pub enable_turbo_mode: bool,
@@ -87,6 +92,7 @@ impl Default for OrchestratorConfig {
         Self {
             enabled: false,
             allow_public: false,
+            token: None,
             enable_zombie_reaper: true,
             enable_turbo_mode: false,
             enable_bin_packing: false,
@@ -261,6 +267,7 @@ impl Orchestrator {
 #[derive(Clone)]
 pub struct AppState {
     pub orchestrator: Arc<RwLock<Orchestrator>>,
+    pub token: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -272,12 +279,20 @@ pub struct PubMetrics {
 
 async fn heartbeat_handler(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(device): Json<Device>,
-) -> Json<String> {
+) -> Result<Json<String>, StatusCode> {
+    authorize(&headers, &state.token)?;
     let mut orch = state.orchestrator.write().unwrap();
     let id = device.id.clone();
     orch.update_device(device);
-    Json(format!("Device '{}' registered/updated.", id))
+    tracing::info!(
+        target: "audit",
+        action = "orchestrator_heartbeat",
+        device = %id,
+        devices_total = orch.devices.len()
+    );
+    Ok(Json(format!("Device '{}' registered/updated.", id)))
 }
 
 #[derive(Serialize)]
@@ -288,33 +303,67 @@ pub struct TaskSubmissionResponse {
 
 async fn submit_task_handler(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(task): Json<Task>,
-) -> Json<TaskSubmissionResponse> {
+) -> Result<Json<TaskSubmissionResponse>, StatusCode> {
+    authorize(&headers, &state.token)?;
     let mut orch = state.orchestrator.write().unwrap();
 
     // Try to schedule immediately
     if let Some(dev_id) = orch.pick_device_for_task(&task) {
         orch.register_assignment(&dev_id, &task);
-        Json(TaskSubmissionResponse {
+        tracing::info!(target: "audit", action = "orchestrator_task_assigned", task = %task.id, device = %dev_id);
+        Ok(Json(TaskSubmissionResponse {
             status: "Assigned".to_string(),
             assigned_device: Some(dev_id),
-        })
+        }))
     } else {
-        orch.pending_tasks.push_back(task);
-        Json(TaskSubmissionResponse {
+        orch.pending_tasks.push_back(task.clone());
+        tracing::info!(target: "audit", action = "orchestrator_task_queued", task = %task.id, queue_len = orch.pending_tasks.len());
+        Ok(Json(TaskSubmissionResponse {
             status: "Queued".to_string(),
             assigned_device: None,
-        })
+        }))
     }
 }
 
-async fn metrics_handler(State(state): State<AppState>) -> Json<PubMetrics> {
+async fn metrics_handler(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<PubMetrics>, StatusCode> {
+    authorize(&headers, &state.token)?;
     let orch = state.orchestrator.read().unwrap();
-    Json(PubMetrics {
+    let snapshot = PubMetrics {
         device_count: orch.devices.len(),
         pending_tasks: orch.pending_tasks.len(),
         devices: orch.devices.values().cloned().collect(),
-    })
+    };
+    tracing::info!(
+        target: "audit",
+        action = "orchestrator_metrics",
+        device_count = snapshot.device_count,
+        pending_tasks = snapshot.pending_tasks
+    );
+    Ok(Json(snapshot))
+}
+
+fn authorize(headers: &axum::http::HeaderMap, token: &Option<String>) -> Result<(), StatusCode> {
+    if let Some(tok) = token {
+        let expected = format!("Bearer {}", tok);
+        if let Some(h) = headers.get(axum::http::header::AUTHORIZATION) {
+            if h.to_str().ok() == Some(expected.as_str()) {
+                tracing::info!(target: "audit", action = "orchestrator_auth_ok", token_present = true);
+                return Ok(());
+            }
+        }
+        tracing::warn!(
+            target: "audit",
+            action = "orchestrator_auth_fail",
+            token_present = headers.contains_key(axum::http::header::AUTHORIZATION)
+        );
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(())
 }
 
 // --- Public Integration API ---

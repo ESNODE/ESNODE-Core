@@ -26,6 +26,7 @@ pub struct HttpState {
     pub orchestrator: Option<esnode_orchestrator::AppState>,
     pub orchestrator_allow_public: bool,
     pub listen_is_loopback: bool,
+    pub orchestrator_token: Option<String>,
 }
 
 pub fn build_router(state: HttpState) -> Router {
@@ -41,7 +42,10 @@ pub fn build_router(state: HttpState) -> Router {
         if state.orchestrator_allow_public || state.listen_is_loopback {
             router = router.nest_service(
                 "/orchestrator",
-                esnode_orchestrator::routes(orch_state.clone()),
+                esnode_orchestrator::routes(esnode_orchestrator::AppState {
+                    orchestrator: orch_state.orchestrator.clone(),
+                    token: state.orchestrator_token.clone(),
+                }),
             );
         } else {
             tracing::warn!(

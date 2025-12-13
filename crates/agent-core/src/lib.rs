@@ -210,6 +210,7 @@ impl Agent {
             .ai_carbon_grams_per_token
             .with_label_values(&[agent_label.as_str()])
             .set(0.0);
+        metrics.degradation_score.set(0.0);
 
         Ok(Agent {
             config,
@@ -266,6 +267,7 @@ impl Agent {
 
                 status_state.set_last_scrape(now_ms);
                 healthy_clone.store(all_ok, Ordering::Relaxed);
+                status_state.update_degradation_score(&metrics_clone);
                 drop(guard);
 
                 if let Some(tsdb) = tsdb_for_collection.clone() {
@@ -289,6 +291,7 @@ impl Agent {
                     esnode_orchestrator::Orchestrator::new(devices, orch_config.clone());
                 let state = esnode_orchestrator::AppState {
                     orchestrator: std::sync::Arc::new(std::sync::RwLock::new(orchestrator)),
+                    token: orch_config.token.clone(),
                 };
 
                 // Spawn the tick loop
@@ -317,6 +320,7 @@ impl Agent {
                 .map(|o| o.allow_public)
                 .unwrap_or(false),
             listen_is_loopback: listen_is_loopback(&config.listen_address),
+            orchestrator_token: config.orchestrator.as_ref().and_then(|o| o.token.clone()),
         };
         let router = build_router(http_state);
         let http_task = serve(&config.listen_address, router)

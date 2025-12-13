@@ -89,6 +89,18 @@ impl Collector for DiskCollector {
                     .saturating_sub(prev.sectors_written)
                     .saturating_mul(512);
                 let io_ms_delta = io.io_time_ms.saturating_sub(prev.io_time_ms);
+                let total_ops = rd_ops_delta.saturating_add(wr_ops_delta);
+                let avg_latency_ms = if total_ops > 0 {
+                    (io_ms_delta as f64) / (total_ops as f64)
+                } else {
+                    0.0
+                };
+                let latency_degraded = avg_latency_ms > 50.0;
+                let busy_pct = if dt > 0.0 {
+                    (io_ms_delta as f64 / (dt * 1000.0)).min(1.0)
+                } else {
+                    0.0
+                };
 
                 metrics
                     .disk_read_ops_total
@@ -110,6 +122,18 @@ impl Collector for DiskCollector {
                     .disk_io_time_ms_total
                     .with_label_values(&[dev.as_str()])
                     .inc_by(io_ms_delta);
+                metrics
+                    .disk_degradation_busy
+                    .with_label_values(&[dev.as_str()])
+                    .set(if busy_pct > 0.8 { 1.0 } else { 0.0 });
+                metrics
+                    .disk_io_avg_latency_ms
+                    .with_label_values(&[dev.as_str()])
+                    .set(avg_latency_ms);
+                metrics
+                    .disk_degradation_latency
+                    .with_label_values(&[dev.as_str()])
+                    .set(if latency_degraded { 1.0 } else { 0.0 });
 
                 if dt > 0.0
                     && root_io_ms_delta.is_none()
@@ -127,6 +151,20 @@ impl Collector for DiskCollector {
 
         self.status
             .set_disk_summary(root_total, root_used, root_io_ms_delta);
+        // Set coarse degradation flag if any device was busy >80% this interval.
+        let any_busy = self.previous.keys().any(|dev| {
+            metrics
+                .disk_degradation_busy
+                .with_label_values(&[dev])
+                .get()
+                > 0.0
+                || metrics
+                    .disk_degradation_latency
+                    .with_label_values(&[dev])
+                    .get()
+                    > 0.0
+        });
+        self.status.set_disk_degraded(any_busy);
         Ok(())
     }
 }

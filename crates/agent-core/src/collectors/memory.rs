@@ -12,6 +12,7 @@ pub struct MemoryCollector {
     prev_pg_in_bytes: Option<u64>,
     prev_pg_out_bytes: Option<u64>,
     status: StatusState,
+    last_swap_spike: bool,
 }
 
 impl MemoryCollector {
@@ -22,6 +23,7 @@ impl MemoryCollector {
             prev_pg_in_bytes: None,
             prev_pg_out_bytes: None,
             status,
+            last_swap_spike: false,
         }
     }
 }
@@ -73,18 +75,28 @@ impl Collector for MemoryCollector {
         if let Some((pg_in_kb, pg_out_kb)) = read_vmstat_pg() {
             let in_b = pg_in_kb.saturating_mul(1024);
             let out_b = pg_out_kb.saturating_mul(1024);
+            let mut spike = false;
             if let Some(prev) = self.prev_pg_in_bytes {
-                metrics
-                    .page_in_bytes_total
-                    .inc_by(in_b.saturating_sub(prev));
+                let delta = in_b.saturating_sub(prev);
+                metrics.page_in_bytes_total.inc_by(delta);
+                if delta > 10 * 1024 * 1024 {
+                    spike = true;
+                }
             }
             if let Some(prev) = self.prev_pg_out_bytes {
-                metrics
-                    .page_out_bytes_total
-                    .inc_by(out_b.saturating_sub(prev));
+                let delta = out_b.saturating_sub(prev);
+                metrics.page_out_bytes_total.inc_by(delta);
+                if delta > 10 * 1024 * 1024 {
+                    spike = true;
+                }
             }
             self.prev_pg_in_bytes = Some(in_b);
             self.prev_pg_out_bytes = Some(out_b);
+            metrics
+                .swap_degradation_spike
+                .set(if spike { 1.0 } else { 0.0 });
+            self.last_swap_spike = spike;
+            self.status.set_swap_degraded(spike);
         }
 
         Ok(())

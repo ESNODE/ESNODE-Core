@@ -365,6 +365,13 @@ fn render_node_overview(frame: &mut ratatui::Frame, area: Rect, state: &AppState
             net_tx = summary.net_tx,
             net_drop = summary.net_drop
         )),
+        Line::from(format!(
+            "   Health Flags: Disk={}  Net={}  Swap={}  Score={}",
+            if summary.disk_degraded { "DEGRADED" } else { "OK" },
+            if summary.network_degraded { "DEGRADED" } else { "OK" },
+            if summary.swap_degraded { "DEGRADED" } else { "OK" },
+            summary.degradation_score
+        )),
         Line::from(""),
         Line::from(format!(
             "   Power: Node Draw:  {power_draw:<8}   Limit:  {power_limit:<8}   Spikes (24h):  {spikes}",
@@ -485,6 +492,25 @@ fn render_network_disk(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
         .disk_root_io_time_ms
         .map(|v| format!("{v} ms"))
         .unwrap_or_else(|| "n/a".to_string());
+    let degradation = format!(
+        "Disk: {}   Net: {}   Swap: {}   Score: {}",
+        if status.disk_degraded {
+            "DEGRADED"
+        } else {
+            "OK"
+        },
+        if status.network_degraded {
+            "DEGRADED"
+        } else {
+            "OK"
+        },
+        if status.swap_degraded {
+            "DEGRADED"
+        } else {
+            "OK"
+        },
+        status.degradation_score
+    );
 
     let text = vec![
         Line::from("                        ESNODE – NETWORK & DISK STATUS                   N01"),
@@ -496,6 +522,8 @@ fn render_network_disk(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
         Line::from(" Disks:"),
         Line::from("   Mount   Used / Total                 IO Time"),
         Line::from(format!("   /       {disk_used:<26}{disk_io}")),
+        Line::from(""),
+        Line::from(format!("   Degradation Flags:  {degradation}")),
         Line::from(""),
         Line::from(""),
         Line::from(" F3=Exit   F5=Refresh   F9=I/O Detail   F12=Back"),
@@ -673,6 +701,29 @@ fn render_agent_status(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
                 .map(|v| format!("{v:.1}"))
                 .unwrap_or_else(|| "n/a".to_string())
         )),
+        Line::from(format!(
+            "     Degradation flags . . . . . . . . . . . . . . . .:  disk={} net={} swap={} score={}",
+            state
+                .last_status
+                .as_ref()
+                .map(|s| if s.disk_degraded { "DEG" } else { "OK" })
+                .unwrap_or("n/a"),
+            state
+                .last_status
+                .as_ref()
+                .map(|s| if s.network_degraded { "DEG" } else { "OK" })
+                .unwrap_or("n/a"),
+            state
+                .last_status
+                .as_ref()
+                .map(|s| if s.swap_degraded { "DEG" } else { "OK" })
+                .unwrap_or("n/a"),
+            state
+                .last_status
+                .as_ref()
+                .map(|s| s.degradation_score.to_string())
+                .unwrap_or_else(|| "n/a".to_string())
+        )),
         Line::from(""),
         Line::from("   Recent Errors (last 10):"),
     ];
@@ -780,6 +831,16 @@ fn render_orchestrator(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
         return;
     }
     let metrics = state.last_orch_metrics.as_ref().unwrap();
+    let orch_cfg = state.config.orchestrator.as_ref();
+    let auth_line = orch_cfg
+        .and_then(|c| c.token.as_ref())
+        .map(|_| "Bearer token REQUIRED".to_string())
+        .unwrap_or_else(|| "No token (local-only)".to_string());
+    let exposure = if orch_cfg.map(|c| c.allow_public).unwrap_or(false) {
+        "Public listener allowed (ensure token set)".to_string()
+    } else {
+        "Loopback-only (default safe mode)".to_string()
+    };
     let mut lines = vec![
         Line::from("                       ESNODE – ORCHESTRATOR STATUS                     N01"),
         Line::from(""),
@@ -792,6 +853,12 @@ fn render_orchestrator(frame: &mut ratatui::Frame, area: Rect, state: &AppState)
         Line::from(format!(
             "     Pending Tasks  . . . . . . . . . . . . . . . . . :  {}",
             metrics.pending_tasks
+        )),
+        Line::from(format!(
+            "     Auth / Exposure  . . . . . . . . . . . . . . . . :  {auth_line}"
+        )),
+        Line::from(format!(
+            "     Binding  . . . . . . . . . . . . . . . . . . . . :  {exposure}"
         )),
         Line::from(""),
         Line::from("   Devices:"),
@@ -1130,6 +1197,8 @@ fn render_placeholder(frame: &mut ratatui::Frame, area: Rect, state: &AppState, 
 #[cfg(test)]
 mod tests {
     use agent_core::state::{GpuStatus, StatusSnapshot};
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
 
     use super::{AgentMode, AppState, MetricToggleState, NodeSummary};
     use agent_core::state::GpuVendor;
@@ -1183,6 +1252,10 @@ mod tests {
             net_drops_per_sec: Some(0.1),
             app_tokens_per_sec: None,
             app_tokens_per_watt: None,
+            disk_degraded: false,
+            network_degraded: false,
+            swap_degraded: false,
+            degradation_score: 0,
         }
     }
 
@@ -1205,6 +1278,58 @@ mod tests {
         assert!(summary.net_rx.contains("eth0"));
         assert_eq!(summary.avg_gpu_util, "75 %");
         assert_eq!(summary.node_power, "220.0 W");
+    }
+
+    fn build_state_with_status() -> AppState {
+        let mut state = AppState::new(
+            false,
+            AgentMode::Standalone,
+            std::path::PathBuf::from("/tmp/esnode.toml"),
+            agent_core::AgentConfig {
+                orchestrator: Some(esnode_orchestrator::OrchestratorConfig {
+                    enabled: true,
+                    allow_public: false,
+                    token: Some("token".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+        state.set_status(Some(sample_status()));
+        state.last_orch_metrics = Some(esnode_orchestrator::PubMetrics {
+            device_count: 1,
+            pending_tasks: 0,
+            devices: vec![esnode_orchestrator::Device {
+                id: "dev1".to_string(),
+                kind: esnode_orchestrator::DeviceKind::Gpu,
+                peak_flops_tflops: 10.0,
+                mem_gb: 32.0,
+                power_watts_idle: 50.0,
+                power_watts_max: 300.0,
+                current_load: 0.2,
+                last_seen: 1234,
+            }],
+        });
+        state
+    }
+
+    #[test]
+    fn render_core_screens_without_panic() {
+        let mut state = build_state_with_status();
+
+        for screen in [
+            super::Screen::NodeOverview,
+            super::Screen::NetworkDisk,
+            super::Screen::AgentStatus,
+            super::Screen::Orchestrator,
+        ] {
+            state.screen = screen;
+            let backend = TestBackend::new(120, 40);
+            let mut terminal = Terminal::new(backend).expect("terminal");
+            terminal
+                .draw(|f| super::render(f, &state))
+                .expect("render should succeed");
+        }
     }
 
     #[test]
@@ -1523,6 +1648,10 @@ struct NodeSummary {
     avg_gpu_power: String,
     tokens_per_watt: String,
     tokens_per_joule: String,
+    disk_degraded: bool,
+    network_degraded: bool,
+    swap_degraded: bool,
+    degradation_score: u64,
 }
 
 impl NodeSummary {
@@ -1557,6 +1686,10 @@ impl NodeSummary {
             avg_gpu_power: "n/a".to_string(),
             tokens_per_watt: "n/a".to_string(),
             tokens_per_joule: "n/a".to_string(),
+            disk_degraded: false,
+            network_degraded: false,
+            swap_degraded: false,
+            degradation_score: 0,
         };
 
         if let Some(status) = state.last_status.as_ref() {
@@ -1725,6 +1858,10 @@ impl NodeSummary {
             if let Some(limit) = state.config.node_power_envelope_watts {
                 summary.node_limit = format!("{limit:.0} W");
             }
+            summary.disk_degraded = status.disk_degraded;
+            summary.network_degraded = status.network_degraded;
+            summary.swap_degraded = status.swap_degraded;
+            summary.degradation_score = status.degradation_score;
             // We don't yet have real AI efficiency counters in the status payload; keep
             // tokens-per-* as n/a to avoid showing fictional numbers. When metrics are
             // added to StatusSnapshot, wire them here.

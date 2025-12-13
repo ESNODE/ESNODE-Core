@@ -18,6 +18,9 @@ pub struct StatusState {
     last_errors: Arc<RwLock<VecDeque<CollectorError>>>,
     last_scrape_unix_ms: Arc<AtomicU64>,
     host: Arc<RwLock<HostMetrics>>,
+    disk_degraded: Arc<AtomicBool>,
+    network_degraded: Arc<AtomicBool>,
+    swap_degraded: Arc<AtomicBool>,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -66,6 +69,14 @@ pub struct StatusSnapshot {
     pub app_tokens_per_sec: Option<f64>,
     #[serde(default)]
     pub app_tokens_per_watt: Option<f64>,
+    #[serde(default)]
+    pub disk_degraded: bool,
+    #[serde(default)]
+    pub network_degraded: bool,
+    #[serde(default)]
+    pub swap_degraded: bool,
+    #[serde(default)]
+    pub degradation_score: u64,
 }
 
 #[derive(Default, Clone, Serialize, Deserialize)]
@@ -330,6 +341,9 @@ impl StatusState {
             last_errors: Arc::new(RwLock::new(VecDeque::new())),
             last_scrape_unix_ms: Arc::new(AtomicU64::new(0)),
             host: Arc::new(RwLock::new(HostMetrics::default())),
+            disk_degraded: Arc::new(AtomicBool::new(false)),
+            network_degraded: Arc::new(AtomicBool::new(false)),
+            swap_degraded: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -404,6 +418,22 @@ impl StatusState {
                 } else {
                     None
                 }
+            },
+            disk_degraded: self.disk_degraded.load(Ordering::Relaxed),
+            network_degraded: self.network_degraded.load(Ordering::Relaxed),
+            swap_degraded: self.swap_degraded.load(Ordering::Relaxed),
+            degradation_score: {
+                let mut score = 0u64;
+                if self.disk_degraded.load(Ordering::Relaxed) {
+                    score += 1;
+                }
+                if self.network_degraded.load(Ordering::Relaxed) {
+                    score += 1;
+                }
+                if self.swap_degraded.load(Ordering::Relaxed) {
+                    score += 1;
+                }
+                score
             },
         }
     }
@@ -524,5 +554,31 @@ impl StatusState {
             guard.net_tx_bytes_per_sec = tx_bytes_per_sec;
             guard.net_drops_per_sec = drops_per_sec;
         }
+    }
+
+    pub fn set_disk_degraded(&self, degraded: bool) {
+        self.disk_degraded.store(degraded, Ordering::Relaxed);
+    }
+
+    pub fn set_network_degraded(&self, degraded: bool) {
+        self.network_degraded.store(degraded, Ordering::Relaxed);
+    }
+
+    pub fn set_swap_degraded(&self, degraded: bool) {
+        self.swap_degraded.store(degraded, Ordering::Relaxed);
+    }
+
+    pub fn update_degradation_score(&self, metrics: &crate::metrics::MetricsRegistry) {
+        let mut score = 0.0;
+        if self.disk_degraded.load(Ordering::Relaxed) {
+            score += 1.0;
+        }
+        if self.network_degraded.load(Ordering::Relaxed) {
+            score += 1.0;
+        }
+        if self.swap_degraded.load(Ordering::Relaxed) {
+            score += 1.0;
+        }
+        metrics.degradation_score.set(score);
     }
 }

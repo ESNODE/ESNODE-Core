@@ -14,6 +14,8 @@ Power requirements:
 > **Tagline:** ESNODE — a GPU-aware node_exporter for the AI era. One binary, all metrics.
 >
 > **Control plane note:** Agents can run standalone (full local TUI/CLI) or attach to an ESNODE-Pulse for centralized control. Metrics (`/metrics`, OTLP, logs) stay enabled in both modes.
+>
+> **Operator heads-up:** The local TSDB defaults to a user-writable XDG path (e.g. `~/.local/share/esnode/tsdb`) so non-root runs succeed; set `local_tsdb_path` to `/var/lib/esnode/tsdb` if you prefer a system path. Orchestrator control APIs are loopback-only by default; set `orchestrator.allow_public=true` **and** `orchestrator.token` to expose them safely.
 
 ---
 
@@ -127,6 +129,7 @@ log_level = "info"
 [orchestrator]
 enabled = false                # Master toggle for orchestration
 # allow_public = false         # Control API (/orchestrator/*) only binds on loopback unless explicitly set true
+# token = "CHANGEME"           # Optional bearer token required on /orchestrator/* when set
 enable_zombie_reaper = true    # Kill zombie processes
 enable_turbo_mode = false      # Latency optimization
 enable_bin_packing = false     # Task scheduling
@@ -184,6 +187,13 @@ GPU/MIG visibility notes:
 - Visibility filters honor `gpu_visible_devices`/`NVIDIA_VISIBLE_DEVICES`; MIG scraping additionally honors `mig_config_devices`/`NVIDIA_MIG_CONFIG_DEVICES`.
 - `k8s_mode = true` publishes compatibility labels (`nvidia.com/gpu`, `nvidia.com/mig-<profile>`) in addition to UUID/index labels.
 - `enable_gpu_events = true` starts a best-effort NVML event loop (short timeout) for XID/ECC/clock/power events; not guaranteed to capture every burst.
+
+Degradation & status surfaces:
+- The `/status` payload and TUI surfaces now include disk/network/swap degradation flags and an aggregate `degradation_score`. GPU throttle/ECC flags are also exposed via metrics.
+- Orchestrator screen in the TUI shows whether loopback-only is enforced and whether a bearer token is required.
+
+Developer tip:
+- `cargo test --workspace` includes a ratatui-backed render smoke test for the TUI; no PTY needed to validate layout rendering.
 ```
 
 Common control-plane commands:

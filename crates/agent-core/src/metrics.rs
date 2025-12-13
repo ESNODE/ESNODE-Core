@@ -44,6 +44,9 @@ pub struct MetricsRegistry {
     pub disk_read_ops_total: IntCounterVec,
     pub disk_write_ops_total: IntCounterVec,
     pub disk_io_time_ms_total: IntCounterVec,
+    pub disk_degradation_busy: GaugeVec,
+    pub disk_io_avg_latency_ms: GaugeVec,
+    pub disk_degradation_latency: GaugeVec,
     pub network_rx_bytes_total: IntCounterVec,
     pub network_tx_bytes_total: IntCounterVec,
     pub network_rx_errors_total: IntCounterVec,
@@ -51,6 +54,11 @@ pub struct MetricsRegistry {
     pub network_tx_packets_total: IntCounterVec,
     pub network_rx_dropped_total: IntCounterVec,
     pub network_tx_dropped_total: IntCounterVec,
+    pub network_degradation_drops: GaugeVec,
+    pub network_tcp_retrans_total: IntCounter,
+    pub network_degradation_retrans: Gauge,
+    pub swap_degradation_spike: Gauge,
+    pub degradation_score: Gauge,
     pub cpu_package_power_watts: GaugeVec,
     pub node_power_watts: Gauge,
     pub node_energy_joules_total: IntCounter,
@@ -82,6 +90,8 @@ pub struct MetricsRegistry {
     pub gpu_pcie_replay_errors_total: IntCounterVec,
     pub gpu_pcie_uncorrectable_errors_total: IntCounterVec,
     pub gpu_nvswitch_errors_total: IntCounterVec,
+    pub gpu_degradation_throttle: GaugeVec,
+    pub gpu_degradation_ecc: GaugeVec,
     pub gpu_fan_speed_percent: GaugeVec,
     pub gpu_clock_sm_mhz: GaugeVec,
     pub gpu_clock_mem_mhz: GaugeVec,
@@ -312,6 +322,27 @@ impl MetricsRegistry {
             ),
             &["device"],
         )?;
+        let disk_degradation_busy = GaugeVec::new(
+            Opts::new(
+                "esnode_disk_degradation_busy",
+                "Flag (0/1) when block device is heavily utilized during the scrape window",
+            ),
+            &["device"],
+        )?;
+        let disk_io_avg_latency_ms = GaugeVec::new(
+            Opts::new(
+                "esnode_disk_io_avg_latency_ms",
+                "Average I/O latency (ms/op) during the scrape window",
+            ),
+            &["device"],
+        )?;
+        let disk_degradation_latency = GaugeVec::new(
+            Opts::new(
+                "esnode_disk_degradation_latency",
+                "Flag (0/1) when disk latency exceeds threshold during the scrape window",
+            ),
+            &["device"],
+        )?;
 
         let network_rx_bytes_total = IntCounterVec::new(
             Opts::new(
@@ -362,6 +393,29 @@ impl MetricsRegistry {
             ),
             &["iface"],
         )?;
+        let network_degradation_drops = GaugeVec::new(
+            Opts::new(
+                "esnode_network_degradation_drops",
+                "Flag (0/1) when interface sees packet drops during the scrape window",
+            ),
+            &["iface"],
+        )?;
+        let network_tcp_retrans_total = IntCounter::with_opts(Opts::new(
+            "esnode_network_tcp_retrans_total",
+            "Total TCP retransmissions (from /proc/net/netstat TCPSegRetrans)",
+        ))?;
+        let network_degradation_retrans = Gauge::with_opts(Opts::new(
+            "esnode_network_degradation_retrans",
+            "Flag (0/1) when TCP retransmissions occur during the scrape window",
+        ))?;
+        let swap_degradation_spike = Gauge::with_opts(Opts::new(
+            "esnode_swap_degradation_spike",
+            "Flag (0/1) when swap in/out spikes during the scrape window",
+        ))?;
+        let degradation_score = Gauge::with_opts(Opts::new(
+            "esnode_degradation_score",
+            "Aggregate degradation score (sum of domain flags)",
+        ))?;
 
         let cpu_package_power_watts = GaugeVec::new(
             Opts::new(
@@ -550,6 +604,20 @@ impl MetricsRegistry {
             Opts::new(
                 "esnode_gpu_pcie_uncorrectable_errors_total",
                 "PCIe uncorrectable errors per GPU",
+            ),
+            GPU_LABELS,
+        )?;
+        let gpu_degradation_throttle = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_degradation_throttle",
+                "Flag (0/1) when GPU is thermally or power throttled",
+            ),
+            GPU_LABELS,
+        )?;
+        let gpu_degradation_ecc = GaugeVec::new(
+            Opts::new(
+                "esnode_gpu_degradation_ecc",
+                "Flag (0/1) when GPU reports ECC errors during the scrape window",
             ),
             GPU_LABELS,
         )?;
@@ -918,6 +986,9 @@ impl MetricsRegistry {
             disk_read_ops_total,
             disk_write_ops_total,
             disk_io_time_ms_total,
+            disk_degradation_busy,
+            disk_io_avg_latency_ms,
+            disk_degradation_latency,
             network_rx_bytes_total,
             network_tx_bytes_total,
             network_rx_errors_total,
@@ -925,6 +996,11 @@ impl MetricsRegistry {
             network_tx_packets_total,
             network_rx_dropped_total,
             network_tx_dropped_total,
+            network_degradation_drops,
+            network_tcp_retrans_total,
+            network_degradation_retrans,
+            swap_degradation_spike,
+            degradation_score,
             gpu_utilization_percent,
             gpu_memory_total_bytes,
             gpu_memory_used_bytes,
@@ -952,6 +1028,8 @@ impl MetricsRegistry {
             gpu_pcie_replay_errors_total,
             gpu_pcie_uncorrectable_errors_total,
             gpu_nvswitch_errors_total,
+            gpu_degradation_throttle,
+            gpu_degradation_ecc,
             agent_scrape_duration_seconds,
             agent_errors_total,
             cpu_package_power_watts,
@@ -1045,6 +1123,9 @@ impl MetricsRegistry {
             Box::new(self.disk_read_ops_total.clone()),
             Box::new(self.disk_write_ops_total.clone()),
             Box::new(self.disk_io_time_ms_total.clone()),
+            Box::new(self.disk_degradation_busy.clone()),
+            Box::new(self.disk_io_avg_latency_ms.clone()),
+            Box::new(self.disk_degradation_latency.clone()),
             Box::new(self.network_rx_bytes_total.clone()),
             Box::new(self.network_tx_bytes_total.clone()),
             Box::new(self.network_rx_errors_total.clone()),
@@ -1052,6 +1133,11 @@ impl MetricsRegistry {
             Box::new(self.network_tx_packets_total.clone()),
             Box::new(self.network_rx_dropped_total.clone()),
             Box::new(self.network_tx_dropped_total.clone()),
+            Box::new(self.network_degradation_drops.clone()),
+            Box::new(self.network_tcp_retrans_total.clone()),
+            Box::new(self.network_degradation_retrans.clone()),
+            Box::new(self.swap_degradation_spike.clone()),
+            Box::new(self.degradation_score.clone()),
             Box::new(self.cpu_package_power_watts.clone()),
             Box::new(self.node_power_watts.clone()),
             Box::new(self.node_energy_joules_total.clone()),
@@ -1082,6 +1168,8 @@ impl MetricsRegistry {
             Box::new(self.gpu_pcie_replay_errors_total.clone()),
             Box::new(self.gpu_pcie_uncorrectable_errors_total.clone()),
             Box::new(self.gpu_nvswitch_errors_total.clone()),
+            Box::new(self.gpu_degradation_throttle.clone()),
+            Box::new(self.gpu_degradation_ecc.clone()),
             Box::new(self.gpu_fan_speed_percent.clone()),
             Box::new(self.gpu_clock_sm_mhz.clone()),
             Box::new(self.gpu_clock_mem_mhz.clone()),
@@ -1115,6 +1203,8 @@ impl MetricsRegistry {
             Box::new(self.pcie_link_width.clone()),
             Box::new(self.pcie_link_gen.clone()),
             Box::new(self.nvswitch_errors_total.clone()),
+            Box::new(self.gpu_degradation_throttle.clone()),
+            Box::new(self.gpu_degradation_ecc.clone()),
             Box::new(self.fabric_latency_microseconds.clone()),
             Box::new(self.cpu_package_energy_joules_total.clone()),
             Box::new(self.cpu_core_power_watts.clone()),

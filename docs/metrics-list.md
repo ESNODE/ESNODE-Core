@@ -63,6 +63,9 @@ All ESNODE-Core metrics are exposed at `/metrics` in Prometheus format and use t
 | `esnode_disk_read_ops_total`         | Counter | `device`  | Read operations since boot.                   |
 | `esnode_disk_write_ops_total`        | Counter | `device`  | Write operations since boot.                  |
 | `esnode_disk_io_time_ms_total`       | Counter | `device`  | I/O time (milliseconds) since boot.           |
+| `esnode_disk_io_avg_latency_ms`      | Gauge   | `device`  | Avg I/O latency (ms/op) per scrape window.    |
+| `esnode_disk_degradation_latency`    | Gauge   | `device`  | 1 when latency exceeds threshold in scrape.   |
+| `esnode_disk_degradation_busy`       | Gauge   | `device`  | 1 when disk is heavily utilized in scrape.    |
 
 ---
 
@@ -77,6 +80,9 @@ All ESNODE-Core metrics are exposed at `/metrics` in Prometheus format and use t
 | `esnode_network_tx_packets_total`    | Counter | `iface`  | Packets transmitted on the interface.               |
 | `esnode_network_rx_dropped_total`    | Counter | `iface`  | Dropped receive packets on the interface.           |
 | `esnode_network_tx_dropped_total`    | Counter | `iface`  | Dropped transmit packets on the interface.          |
+| `esnode_network_degradation_drops`   | Gauge   | `iface`  | 1 when drops occurred in the scrape window.         |
+| `esnode_network_tcp_retrans_total`   | Counter | *(none)* | TCP retransmissions (TCPSegRetrans).                |
+| `esnode_network_degradation_retrans` | Gauge   | *(none)* | 1 when retransmissions occurred in scrape window.   |
 
 ---
 
@@ -97,6 +103,8 @@ All ESNODE-Core metrics are exposed at `/metrics` in Prometheus format and use t
 | `esnode_gpu_clock_graphics_mhz`              | Gauge   | `gpu`         | Graphics clock.                                         |
 | `esnode_gpu_power_limit_watts`               | Gauge   | `gpu`         | Power cap limit.                                        |
 | `esnode_gpu_throttle_reason`                 | Gauge   | `gpu`,`reason`| Throttle reason active = 1.                             |
+| `esnode_gpu_degradation_throttle`            | Gauge   | `gpu`         | 1 when thermal or power throttle is active.             |
+| `esnode_gpu_degradation_ecc`                 | Gauge   | `gpu`         | 1 when ECC errors observed during the scrape.           |
 | `esnode_gpu_pcie_tx_bytes_total`             | Counter | `gpu`         | PCIe TX traffic.                                        |
 | `esnode_gpu_pcie_rx_bytes_total`             | Counter | `gpu`         | PCIe RX traffic.                                        |
 | `esnode_gpu_nvlink_rx_bytes_total`           | Counter | `gpu`,`link`  | NVLink RX bytes.                                        |
@@ -152,6 +160,7 @@ All ESNODE-Core metrics are exposed at `/metrics` in Prometheus format and use t
 | `esnode_ai_tokens_per_watt`             | Gauge | `agent` | Instant tokens per watt (agent label = managed node ID or `local`).             |
 | `esnode_ai_cost_per_million_tokens_usd` | Gauge | `agent` | Cost per million tokens (power-based).   |
 | `esnode_ai_carbon_grams_per_token`      | Gauge | `agent` | Estimated carbon per token.              |
+| `esnode_degradation_score`              | Gauge | *(none)*| Sum of degradation flags (disk/net/swap).|
 
 *Requires model-serving layer metrics such as `model_tokens_total` and `model_requests_total` to compute.*
 

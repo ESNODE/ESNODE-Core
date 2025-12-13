@@ -494,6 +494,7 @@ impl Collector for GpuCollector {
                 }
 
                 // ECC and throttle reasons not available in nvml-wrapper 0.9; skip gracefully.
+                let mut ecc_flag = false;
                 for (counter, label) in [
                     (EccCounter::Volatile, "volatile"),
                     (EccCounter::Aggregate, "aggregate"),
@@ -507,10 +508,14 @@ impl Collector for GpuCollector {
                         let key = format!("{}:{}", gpu_label, label);
                         let prev = *self.ecc_prev.get(&key).unwrap_or(&0);
                         if total >= prev {
+                            let delta = total - prev;
                             metrics
                                 .gpu_ecc_errors_total
                                 .with_label_values(&[uuid_label, gpu_label.as_str(), label])
-                                .inc_by(total - prev);
+                                .inc_by(delta);
+                            if delta > 0 {
+                                ecc_flag = true;
+                            }
                         }
                         self.ecc_prev.insert(key, total);
                     } else {
@@ -521,6 +526,10 @@ impl Collector for GpuCollector {
                             .inc_by(0);
                     }
                 }
+                metrics
+                    .gpu_degradation_ecc
+                    .with_label_values(&[uuid_label, gpu_label.as_str()])
+                    .set(if ecc_flag { 1.0 } else { 0.0 });
                 if let Ok(ecc_state) = device.is_ecc_enabled() {
                     metrics
                         .gpu_ecc_mode
@@ -572,6 +581,10 @@ impl Collector for GpuCollector {
                         reason_list.push("power".to_string());
                     }
                     health.throttle_reasons = reason_list;
+                    metrics
+                        .gpu_degradation_throttle
+                        .with_label_values(&[uuid_label, gpu_label.as_str()])
+                        .set(if thermal || power { 1.0 } else { 0.0 });
                 } else {
                     set_throttle_metric(
                         &metrics.gpu_throttle_reason,
@@ -594,6 +607,10 @@ impl Collector for GpuCollector {
                         "other",
                         false,
                     );
+                    metrics
+                        .gpu_degradation_throttle
+                        .with_label_values(&[uuid_label, gpu_label.as_str()])
+                        .set(0.0);
                 }
 
                 // Initialize always-on counters for compatibility.

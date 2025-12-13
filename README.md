@@ -34,6 +34,9 @@ ESNODE-Core is a GPU-aware host metrics exporter for Linux nodes. It exposes CPU
 - Self-observability: scrape duration + error counters per collector.
 - Health endpoint at `/healthz`.
 - JSON status endpoint at `/status` (`/v1/status` alias) with node load, power, temps, GPU snapshot (identity/health/MIG tree), last scrape/errors; SSE stream at `/events` for near-real-time loops.
+- Degradation signals: disk busy/latency, network drops/retrans, swap spikes, and GPU throttle/ECC flags roll up into `esnode_degradation_score`; surfaced in `/status` and the TUI.
+- Control-plane safety: orchestrator `/orchestrator/*` binds loopback-only by default; set `orchestrator.allow_public=true` to expose, and use `orchestrator.token` to require `Authorization: Bearer <token>`. Auth successes/failures and task/heartbeat actions emit structured audit logs (target `audit`).
+- Local TSDB defaults to a user-writable XDG path so non-root runs no longer fail on `/var/lib/esnode/tsdb`; override with `local_tsdb_path` when you want `/var/lib`.
 
 ## Power- & Model-awareness (roadmap)
 - Power: keep `esnode_gpu_power_watts` and add optional `esnode_cpu_package_power_watts`, `esnode_node_power_watts`, and PDU/BMC readings where available (RAPL/hwmon/IPMI).
@@ -80,7 +83,7 @@ Configuration precedence: CLI flags > env vars > `esnode.toml` > defaults. See `
   - `mig_config_devices` / `NVIDIA_MIG_CONFIG_DEVICES` – filter MIG-capable GPUs when `enable_gpu_mig` is true.
   - Optional `gpu-nvml-ffi-ext` feature enables additional NVML field-based counters (PCIe/etc.), best-effort only.
   - `enable_app` + `app_metrics_url` – app/model metrics collector uses a 2s HTTP timeout; slow or hung endpoints are skipped for that scrape without blocking other collectors.
-  - Orchestrator control API (`/orchestrator/*`) is exposed only on loopback listeners by default; set `orchestrator.allow_public=true` explicitly if you need to serve it on non-loopback addresses.
+  - Orchestrator control API (`/orchestrator/*`) is exposed only on loopback listeners by default; set `orchestrator.allow_public=true` explicitly if you need to serve it on non-loopback addresses and configure `orchestrator.token` to require `Authorization: Bearer <token>`.
 
 Local TSDB path (default): when `enable_local_tsdb` is true, the agent now resolves `local_tsdb_path` to `$XDG_DATA_HOME/esnode/tsdb` or `~/.local/share/esnode/tsdb` so non-root runs don’t fail on `/var/lib`. Set `ESNODE_LOCAL_TSDB_PATH` or the config key if you want `/var/lib/esnode/tsdb` and ensure the directory is writable by the agent user.
 
@@ -112,6 +115,17 @@ Community & policies:
 - Disconnect: `esnode-core server disconnect` returns to standalone.
 - Status: `esnode-core server status` shows server, cluster ID, node ID, last contact.
 - TUI: `esnode-core cli` shows full menu when standalone; shows managed read-only panel when attached to ESNODE-Pulse.
+
+### Operator notes (day 1)
+- TUI surfaces degradation flags/score on Node Overview, Network & Disk, Agent Status; orchestrator screen shows token/loopback exposure.
+- App collector uses a 2s timeout; slow endpoints are skipped per scrape to avoid blocking other collectors.
+- TSDB: defaults to XDG (`~/.local/share/esnode/tsdb`), opt into `/var/lib/esnode/tsdb` explicitly and pre-create with correct perms.
+- Orchestrator: keep loopback-only unless `allow_public=true` **and** `token` is set; audit logs appear under tracing target `audit`.
+
+### Developer notes
+- `cargo test --workspace` includes a TUI render smoke test using ratatui’s test backend (no PTY required).
+- New metrics live in `docs/metrics-list.md`; gap tracking in `docs/gap-logbook.md`.
+- Local HTTP defaults avoid privileged paths; adjust in `crates/agent-core/src/config.rs` if changing defaults.
 
 ## Install packages (Agent – public)
 Example commands (adjust version/OS paths):
