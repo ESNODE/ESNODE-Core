@@ -38,9 +38,7 @@ use crate::state::{
 #[cfg(all(feature = "gpu", target_os = "linux"))]
 use nvml_wrapper::error::NvmlError;
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
-use nvml_wrapper_sys::bindings::{
-    nvmlDevice_t, nvmlReturn_t,
-};
+use nvml_wrapper_sys::bindings::{nvmlDevice_t, nvmlReturn_t};
 
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
 extern "C" {
