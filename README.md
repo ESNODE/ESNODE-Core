@@ -175,12 +175,41 @@ Example commands (adjust version/OS paths):
 - Override `image:` and namespace as needed; set `local_tsdb_path` to match your volume; set `orchestrator.token` and `allow_public` only when intentionally exposing the control API.
 - If building multi-arch images, supply the matching tarball for each arch (e.g., `linux-arm64`); current Dockerfile targets `linux-amd64`.
 
+### Helm install (from repo checkout)
+```bash
+helm upgrade --install esnode-core ./deploy/helm/esnode-core \
+  --set image.repository=myregistry/esnode-core \
+  --set image.tag=0.1.0 \
+  --set tsdb.hostPath=/var/lib/esnode/tsdb \
+  --set config.orchestrator.allowPublic=false \
+  --set config.orchestrator.token=""
+```
+Adjust hostPath, namespace (`-n`), tolerations/nodeSelector, and orchestrator/token as needed.
+
+### Terraform module (wrapping Helm)
+Example using the local chart:
+```hcl
+module "esnode_core" {
+  source = "./deploy/terraform/esnode-core"
+
+  namespace                = "default"
+  release_name             = "esnode-core"
+  image_repository         = "myregistry/esnode-core"
+  image_tag                = "0.1.0"
+  tsdb_host_path           = "/var/lib/esnode/tsdb"
+  orchestrator_allow_public = false
+  orchestrator_token       = ""
+}
+```
+Run `terraform init && terraform apply` with a configured kubecontext. Update the image/tag and host paths to match your environment.
+
 ## Documentation
 - Quickstart: `docs/quickstart.md`
 - Metrics reference: `docs/metrics-list.md`
 - Monitoring examples: `docs/monitoring-examples.md`
 - Architecture: `docs/architecture.md`
 - Platform matrix: `docs/platform-matrix.md`
+- Dashboards & alerts: `docs/dashboards/grafana-esnode-core.json` and `docs/dashboards/alerts.yaml` (import into Grafana/Prometheus)
 - Smoke test script: `scripts/smoke.sh` (builds, runs core+pulse locally, curls endpoints)
 
 ## Kubernetes Deployment

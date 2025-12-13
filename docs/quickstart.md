@@ -17,6 +17,18 @@ Power requirements:
 >
 > **Operator heads-up:** The local TSDB defaults to a user-writable XDG path (e.g. `~/.local/share/esnode/tsdb`) so non-root runs succeed; set `local_tsdb_path` to `/var/lib/esnode/tsdb` if you prefer a system path. Orchestrator control APIs are loopback-only by default; set `orchestrator.allow_public=true` **and** `orchestrator.token` to expose them safely.
 
+## Installation options (choose your path)
+- Packages: `.deb` and `.rpm` in `public/distribution/releases/linux-amd64/`
+- Tarball: `esnode-core-0.1.0-linux-amd64.tar.gz` (direct binary)
+- Docker: `docker build -t <repo>/esnode-core:0.1.0 -f Dockerfile .`
+- Docker Compose: `docker-compose up -d` (uses repo Dockerfile; set `ESNODE_IMAGE` to override tag)
+- Kubernetes:
+  - Plain manifests: `deploy/k8s/*.yaml` (ConfigMap, DaemonSet, Service)
+  - Helm chart: `deploy/helm/esnode-core/` (`helm upgrade --install ...`)
+  - Terraform module wrapping Helm: `deploy/terraform/esnode-core/`
+
+Pick the method that fits your deployment and flip the same config knobs (`esnode.toml` / Helm values / Terraform inputs).
+
 ---
 
 ## 1. Prerequisites
@@ -221,6 +233,10 @@ Notes:
 - Set `image:` to your registry/tag; provide matching tarball per arch if building multi-arch images.
 - Keep `orchestrator.allow_public=false` unless intentionally exposing control APIs; set `orchestrator.token` when enabling public exposure.
 - Adjust `local_tsdb_path` to match your volume and permissions; defaults to `/var/lib/esnode/tsdb` in the manifest.
+
+## Dashboards & alerts
+- Grafana dashboard: `docs/dashboards/grafana-esnode-core.json`
+- Prometheus alerts: `docs/dashboards/alerts.yaml` (includes disk/network/gpu degradation and aggregate score)
 ```
 
 Common control-plane commands:

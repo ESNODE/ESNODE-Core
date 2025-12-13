@@ -124,24 +124,24 @@ pub fn register_extended_events(
 }
 
 #[cfg(not(all(feature = "gpu-nvml-ffi-ext", feature = "gpu")))]
-pub fn pcie_ext_counters(_device: std::ffi::c_void) -> Result<PcieExt, NvmlExtError> {
+pub fn pcie_ext_counters(_device: *mut std::ffi::c_void) -> Result<PcieExt, NvmlExtError> {
     Err(NvmlExtError::NotSupported)
 }
 #[cfg(not(all(feature = "gpu-nvml-ffi-ext", feature = "gpu")))]
-pub fn nvswitch_ext_counters(_device: std::ffi::c_void) -> Result<NvSwitchExt, NvmlExtError> {
+pub fn nvswitch_ext_counters(_device: *mut std::ffi::c_void) -> Result<NvSwitchExt, NvmlExtError> {
     Err(NvmlExtError::NotSupported)
 }
 #[cfg(not(all(feature = "gpu-nvml-ffi-ext", feature = "gpu")))]
 pub fn get_field_values(
-    _device: std::ffi::c_void,
+    _device: *mut std::ffi::c_void,
     _field_ids: &[u32],
 ) -> Result<FieldValues, NvmlExtError> {
     Err(NvmlExtError::NotSupported)
 }
 #[cfg(not(all(feature = "gpu-nvml-ffi-ext", feature = "gpu")))]
 pub fn register_extended_events(
-    _device: std::ffi::c_void,
-    _event_set: std::ffi::c_void,
+    _device: *mut std::ffi::c_void,
+    _event_set: *mut std::ffi::c_void,
 ) -> Result<(), NvmlExtError> {
     Err(NvmlExtError::NotSupported)
 }

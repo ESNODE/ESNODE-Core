@@ -43,3 +43,12 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/esnode-core:${{ github.event.inputs.image_tag || github.ref_name }}
             ${{ secrets.DOCKERHUB_USERNAME }}/esnode-core:latest
           platforms: linux/amd64
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Helm lint
+        run: helm lint deploy/helm/esnode-core
+
+      - name: Helm template
+        run: helm template test-release deploy/helm/esnode-core --set image.repository=dummy --set image.tag=dummy
