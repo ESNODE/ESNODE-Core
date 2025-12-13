@@ -2,7 +2,7 @@
 use std::time::Instant;
 
 use async_trait::async_trait;
-use tracing::{warn, debug};
+use tracing::{debug, warn};
 use ureq;
 
 use crate::collectors::Collector;
@@ -51,10 +51,10 @@ impl AppCollector {
             // vllm:prompt_tokens_total 5678
             // tgi_generated_tokens 9012
             // model_tokens_total 3456
-            if line.starts_with("vllm:generation_tokens_total") 
+            if line.starts_with("vllm:generation_tokens_total")
                 || line.starts_with("vllm:prompt_tokens_total")
                 || line.starts_with("tgi_generated_tokens")
-                || line.starts_with("model_tokens_total") 
+                || line.starts_with("model_tokens_total")
             {
                 if let Some(val_str) = line.split_whitespace().last() {
                     if let Ok(val) = val_str.parse::<f64>() {
@@ -64,7 +64,7 @@ impl AppCollector {
                 }
             }
         }
-        
+
         if found {
             Some(total)
         } else {
@@ -81,7 +81,7 @@ impl Collector for AppCollector {
 
     async fn collect(&mut self, metrics: &MetricsRegistry) -> anyhow::Result<()> {
         let Some(body) = self.fetch_metrics() else {
-             if !self.warned {
+            if !self.warned {
                 warn!("App metrics endpoint unreachable at {}", self.url);
                 self.warned = true;
             }
@@ -90,17 +90,20 @@ impl Collector for AppCollector {
 
         if let Some(current_tokens) = self.parse_tokens(&body) {
             let now = Instant::now();
-            
+
             if let (Some(prev_tokens), Some(prev_ts)) = (self.last_tokens, self.last_ts) {
                 let dt = now.duration_since(prev_ts).as_secs_f64();
                 if dt > 0.0 && current_tokens >= prev_tokens {
                     let rate = (current_tokens - prev_tokens) / dt;
                     metrics.app_tokens_per_sec.set(rate);
                     self.status.set_app_metrics(rate);
-                    
+
                     // Also update the convenience efficiency metric if we have power
                     if let Some(tps) = self.status.snapshot().app_tokens_per_watt {
-                        metrics.ai_tokens_per_watt.with_label_values(&["agent"]).set(tps);
+                        metrics
+                            .ai_tokens_per_watt
+                            .with_label_values(&["agent"])
+                            .set(tps);
                     }
                 }
             }

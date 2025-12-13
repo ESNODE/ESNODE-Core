@@ -36,7 +36,10 @@ pub fn build_router(state: HttpState) -> Router {
         .route("/tsdb/export", get(tsdb_export_handler));
 
     if let Some(orch_state) = &state.orchestrator {
-        router = router.nest_service("/orchestrator", esnode_orchestrator::routes(orch_state.clone()));
+        router = router.nest_service(
+            "/orchestrator",
+            esnode_orchestrator::routes(orch_state.clone()),
+        );
     }
 
     router.with_state(state)

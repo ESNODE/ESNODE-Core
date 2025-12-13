@@ -581,47 +581,6 @@ fn ensure_local_control(config: &AgentConfig) -> Result<()> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{cli_to_overrides, Cli, Command, MetricsProfile, MetricSet};
-    use clap::Parser;
-
-    #[test]
-    fn cli_parses_status_command() {
-        let cli = Cli::parse_from(["esnode-core", "status"]);
-        assert!(matches!(cli.command, Some(Command::Status)));
-    }
-
-    #[test]
-    fn cli_parses_metrics_command_with_profile() {
-        let cli = Cli::parse_from(["esnode-core", "metrics", "full"]);
-        match cli.command {
-            Some(Command::Metrics { profile }) => assert!(matches!(profile, MetricsProfile::Full)),
-            other => panic!("unexpected {:?}", other),
-        }
-    }
-
-    #[test]
-    fn cli_overrides_enable_flags() {
-        let cli = Cli::parse_from([
-            "esnode-core",
-            "--enable-cpu",
-            "false",
-            "--enable-network",
-            "false",
-            "enable-metric-set",
-            "gpu",
-        ]);
-        let overrides = cli_to_overrides(&cli).unwrap();
-        assert_eq!(overrides.enable_cpu, Some(false));
-        assert_eq!(overrides.enable_network, Some(false));
-        match cli.command {
-            Some(Command::EnableMetricSet { set }) => assert!(matches!(set, MetricSet::Gpu)),
-            _ => panic!("expected enable-metric-set"),
-        }
-    }
-}
-
 fn agent_mode(config: &AgentConfig) -> AgentMode {
     if let Some(srv) = &config.managed_server {
         AgentMode::Managed(ManagedMetadata {
@@ -712,4 +671,45 @@ fn command_server_status(config: &AgentConfig) -> Result<()> {
 
 fn default_node_id() -> String {
     std::env::var("HOSTNAME").unwrap_or_else(|_| "node-unknown".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cli_to_overrides, Cli, Command, MetricSet, MetricsProfile};
+    use clap::Parser;
+
+    #[test]
+    fn cli_parses_status_command() {
+        let cli = Cli::parse_from(["esnode-core", "status"]);
+        assert!(matches!(cli.command, Some(Command::Status)));
+    }
+
+    #[test]
+    fn cli_parses_metrics_command_with_profile() {
+        let cli = Cli::parse_from(["esnode-core", "metrics", "full"]);
+        match cli.command {
+            Some(Command::Metrics { profile }) => assert!(matches!(profile, MetricsProfile::Full)),
+            other => panic!("unexpected {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cli_overrides_enable_flags() {
+        let cli = Cli::parse_from([
+            "esnode-core",
+            "--enable-cpu",
+            "false",
+            "--enable-network",
+            "false",
+            "enable-metric-set",
+            "gpu",
+        ]);
+        let overrides = cli_to_overrides(&cli).unwrap();
+        assert_eq!(overrides.enable_cpu, Some(false));
+        assert_eq!(overrides.enable_network, Some(false));
+        match cli.command {
+            Some(Command::EnableMetricSet { set }) => assert!(matches!(set, MetricSet::Gpu)),
+            _ => panic!("expected enable-metric-set"),
+        }
+    }
 }

@@ -29,7 +29,7 @@
 ## Data & telemetry disclosure
 - Collected locally: host metrics (CPU, memory, disk, network), GPU metrics (NVML; MIG/NVLink), power readings (RAPL/hwmon/BMC), and optional GPU events (XID/ECC). Containers/K8s labels are derived from visible device lists (`NVIDIA_VISIBLE_DEVICES`, etc.).
 - Emitted externally: Prometheus `/metrics` text, JSON `/status` (`/v1/status`), and optional SSE `/events`. No outbound calls are made unless configured to connect to ESNODE-Pulse.
-- Persistence: optional local TSDB when `enable_local_tsdb` is true (JSONL blocks under `local_tsdb_path`); no other on-disk persistence beyond logs and config.
+- Persistence: optional local TSDB when `enable_local_tsdb` is true (JSONL blocks under `local_tsdb_path`, defaulting to `$XDG_DATA_HOME/esnode/tsdb` or `~/.local/share/esnode/tsdb` for non-root runs); no other on-disk persistence beyond logs and config.
 - Sensitive data: no credentials are collected; avoid embedding secrets in labels/config. Hostnames/PCI IDs are exposed in metrics/labels.
 ## Expectations
 - No guarantees for backward compatibility on unreleased/main branch builds.

@@ -15,8 +15,8 @@ use std::time::Instant;
 
 use anyhow::Context;
 use collectors::{
-    cpu::CpuCollector, disk::DiskCollector, gpu::GpuCollector, memory::MemoryCollector,
-    network::NetworkCollector, numa::NumaCollector, power::PowerCollector, app::AppCollector,
+    app::AppCollector, cpu::CpuCollector, disk::DiskCollector, gpu::GpuCollector,
+    memory::MemoryCollector, network::NetworkCollector, numa::NumaCollector, power::PowerCollector,
     Collector,
 };
 pub use config::{AgentConfig, ConfigOverrides, LogLevel};
@@ -164,7 +164,17 @@ impl Agent {
                 config.local_tsdb_retention_hours,
                 config.local_tsdb_max_disk_mb
             );
-            Some(Arc::new(LocalTsdb::new(LocalTsdbConfig::from(&config))?))
+            match LocalTsdb::new(LocalTsdbConfig::from(&config)) {
+                Ok(tsdb) => Some(Arc::new(tsdb)),
+                Err(err) => {
+                    warn!(
+                        "Local TSDB disabled: failed to init at {} ({err}); on-agent buffer is OFF. \
+                         Set ESNODE_LOCAL_TSDB_PATH to a writable directory or disable --enable-local-tsdb.",
+                        config.local_tsdb_path
+                    );
+                    None
+                }
+            }
         } else {
             None
         };
@@ -270,17 +280,18 @@ impl Agent {
             if orch_config.enabled {
                 info!("Initializing ESNODE-Orchestrator...");
                 let devices = vec![]; // TODO: Populate from collectors?
-                let orchestrator = esnode_orchestrator::Orchestrator::new(devices, orch_config.clone());
+                let orchestrator =
+                    esnode_orchestrator::Orchestrator::new(devices, orch_config.clone());
                 let state = esnode_orchestrator::AppState {
                     orchestrator: std::sync::Arc::new(std::sync::RwLock::new(orchestrator)),
                 };
-                
+
                 // Spawn the tick loop
                 let loop_state = state.clone();
                 tokio::spawn(async move {
                     esnode_orchestrator::run_loop(loop_state).await;
                 });
-                
+
                 Some(state)
             } else {
                 None

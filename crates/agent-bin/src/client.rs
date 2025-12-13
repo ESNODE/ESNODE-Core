@@ -51,11 +51,13 @@ impl AgentClient {
         let resp = ureq::get(&url).call();
         match resp {
             Ok(r) => {
-                let body = r.into_string().context("reading /orchestrator/metrics body")?;
+                let body = r
+                    .into_string()
+                    .context("reading /orchestrator/metrics body")?;
                 let metrics: esnode_orchestrator::PubMetrics =
                     serde_json::from_str(&body).context("parsing orchestrator metrics")?;
                 Ok(metrics)
-            },
+            }
             Err(ureq::Error::Status(404, _)) => {
                 // If 404, it means orchestrator is disabled. Return default/empty.
                 Ok(esnode_orchestrator::PubMetrics {

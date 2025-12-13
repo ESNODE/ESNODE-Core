@@ -10,6 +10,7 @@ All notable changes to this project will be documented here.
 - UUID-first metrics: see `docs/migrations.md` for guidance. `_compat` metrics (when `k8s_mode` is enabled) are provided for a transition period; plan to move dashboards to UUID-based labels.
 
 ## Unreleased
+- Fixed local TSDB default path for non-root runs by resolving to `$XDG_DATA_HOME/esnode/tsdb` or `~/.local/share/esnode/tsdb`, and now disable with a clear warning if initialization fails (resolves GitHub issue #2). Documented upgrade guidance in README and quickstart.
 - Add GitHub Actions release pipeline, packaging via `scripts/dist/esnode-core-release.sh`, and artifact checksums.
 - Expanded GPU/MIG telemetry, K8s compatibility labels, and NVML FFI scaffolding.
 - Added contributor documentation (CONTRIBUTING.md, CODE_OF_CONDUCT.md) and security policy.

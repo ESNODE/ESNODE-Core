@@ -1167,7 +1167,6 @@ mod tests {
                 clock_mem_mhz: None,
                 thermal_throttle: false,
                 power_throttle: false,
-                ..Default::default()
             }],
             cpu_cores: Some(16),
             cpu_util_percent: Some(55.0),
@@ -1210,16 +1209,18 @@ mod tests {
 
     #[test]
     fn metric_toggle_state_prefers_config() {
-        let mut cfg = agent_core::AgentConfig::default();
-        cfg.enable_cpu = false;
-        cfg.enable_memory = false;
-        cfg.enable_disk = false;
-        cfg.enable_network = false;
-        cfg.enable_gpu = true;
-        cfg.enable_power = false;
-        cfg.enable_mcp = true;
-        cfg.enable_app = false;
-        cfg.enable_rack_thermals = true;
+        let cfg = agent_core::AgentConfig {
+            enable_cpu: false,
+            enable_memory: false,
+            enable_disk: false,
+            enable_network: false,
+            enable_gpu: true,
+            enable_power: false,
+            enable_mcp: true,
+            enable_app: false,
+            enable_rack_thermals: true,
+            ..Default::default()
+        };
 
         let toggles = MetricToggleState::from_config(&cfg, None);
         assert_eq!(toggles.host, 'N');
@@ -1653,13 +1654,13 @@ impl NodeSummary {
             }
 
             if let Some(_tps) = status.app_tokens_per_sec {
-                // We don't have a field for raw tokens/sec in NodeSummary yet, 
+                // We don't have a field for raw tokens/sec in NodeSummary yet,
                 // but we use it for efficiency.
                 if let Some(tpw) = status.app_tokens_per_watt {
                     summary.tokens_per_watt = format!("{:.2}", tpw);
                     // Approximate Joule calc (Watts * 1s = Joules for that second)
                     // So Tokens/Joule is essentially same as Tokens/Watt if considering rate per second.
-                    summary.tokens_per_joule = format!("{:.2}", tpw); 
+                    summary.tokens_per_joule = format!("{:.2}", tpw);
                 }
             }
 

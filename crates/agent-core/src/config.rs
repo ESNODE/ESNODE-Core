@@ -269,7 +269,13 @@ impl AgentConfig {
 }
 
 fn default_local_tsdb_path() -> String {
-    "/var/lib/esnode/tsdb".to_string()
+    if let Ok(path) = std::env::var("XDG_DATA_HOME") {
+        format!("{}/esnode/tsdb", path)
+    } else if let Ok(home) = std::env::var("HOME") {
+        format!("{}/.local/share/esnode/tsdb", home)
+    } else {
+        "/var/lib/esnode/tsdb".to_string()
+    }
 }
 
 fn default_local_tsdb_retention_hours() -> u64 {

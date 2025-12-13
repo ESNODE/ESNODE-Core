@@ -1,5 +1,7 @@
 // ESNODE | Source Available BUSL-1.1 | Copyright (c) 2024 Estimatedstocks AB
 use async_trait::async_trait;
+#[cfg(all(feature = "gpu", target_os = "linux"))]
+use nvml_wrapper::bitmasks::event::EventTypes;
 #[cfg(feature = "gpu")]
 use nvml_wrapper::{
     bitmasks::device::ThrottleReasons,
@@ -11,8 +13,6 @@ use nvml_wrapper::{
     struct_wrappers::nv_link::UtilizationControl,
     Nvml,
 };
-#[cfg(all(feature = "gpu", target_os = "linux"))]
-use nvml_wrapper::bitmasks::event::EventTypes;
 use prometheus::GaugeVec;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -25,18 +25,18 @@ use tokio::sync::mpsc;
 use anyhow::Result;
 
 use crate::collectors::Collector;
+use crate::config::AgentConfig;
 #[cfg(all(feature = "gpu", target_os = "linux"))]
 use crate::event_worker::spawn_event_worker;
 use crate::metrics::MetricsRegistry;
+#[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
+use crate::state::{ComputeInstanceNode, GpuInstanceNode, MigTree};
 use crate::state::{
     FabricLink, FabricLinkType, GpuCapabilities, GpuHealth, GpuIdentity, GpuStatus, GpuTopo,
     GpuVendor, StatusState,
 };
-#[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
-use crate::state::{ComputeInstanceNode, GpuInstanceNode, MigTree};
 #[cfg(all(feature = "gpu", target_os = "linux"))]
 use nvml_wrapper::error::NvmlError;
-use crate::config::AgentConfig;
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
 use nvml_wrapper_sys::bindings::{
     nvmlDeviceGetDeviceHandleFromMigDeviceHandle, nvmlDeviceGetMaxMigDeviceCount,
@@ -116,14 +116,14 @@ impl GpuCollector {
                             nvml: Some(nvml),
                             ecc_prev: HashMap::new(),
                             last_power: HashMap::new(),
-                        last_pcie_sample: HashMap::new(),
-                        last_pcie_replay: HashMap::new(),
-                        nvlink_util_prev: HashMap::new(),
-                        nvlink_err_prev: HashMap::new(),
-                        enable_mig: config.enable_gpu_mig,
-                        enable_events: config.enable_gpu_events,
-                        visible_filter: visible_filter.clone(),
-                        mig_config_filter: mig_cfg_filter.clone(),
+                            last_pcie_sample: HashMap::new(),
+                            last_pcie_replay: HashMap::new(),
+                            nvlink_util_prev: HashMap::new(),
+                            nvlink_err_prev: HashMap::new(),
+                            enable_mig: config.enable_gpu_mig,
+                            enable_events: config.enable_gpu_events,
+                            visible_filter: visible_filter.clone(),
+                            mig_config_filter: mig_cfg_filter.clone(),
                             k8s_mode: config.k8s_mode,
                             resource_prefix: if config.k8s_mode {
                                 "nvidia.com"
@@ -138,44 +138,42 @@ impl GpuCollector {
                         None,
                     )
                 }
-                Err(e) => {
-                    (
-                        Self {
-                            nvml: None,
-                            ecc_prev: HashMap::new(),
-                            last_power: HashMap::new(),
-                            last_pcie_sample: HashMap::new(),
-                            last_pcie_replay: HashMap::new(),
-                            nvlink_util_prev: HashMap::new(),
-                            nvlink_err_prev: HashMap::new(),
-                            enable_mig: config.enable_gpu_mig,
-                            enable_events: config.enable_gpu_events,
-                            visible_filter: build_filter(
-                                config
-                                    .gpu_visible_devices
-                                    .as_deref()
-                                    .or(env_visible.as_deref()),
-                            ),
-                            mig_config_filter: build_filter(
-                                config
-                                    .mig_config_devices
-                                    .as_deref()
-                                    .or(env_mig_config.as_deref()),
-                            ),
-                            k8s_mode: config.k8s_mode,
-                            resource_prefix: if config.k8s_mode {
-                                "nvidia.com"
-                            } else {
-                                "esnode.co"
-                            },
-                            enable_amd: config.enable_gpu_amd,
-                            #[cfg(all(feature = "gpu", target_os = "linux"))]
-                            event_rx: None,
-                            status,
+                Err(e) => (
+                    Self {
+                        nvml: None,
+                        ecc_prev: HashMap::new(),
+                        last_power: HashMap::new(),
+                        last_pcie_sample: HashMap::new(),
+                        last_pcie_replay: HashMap::new(),
+                        nvlink_util_prev: HashMap::new(),
+                        nvlink_err_prev: HashMap::new(),
+                        enable_mig: config.enable_gpu_mig,
+                        enable_events: config.enable_gpu_events,
+                        visible_filter: build_filter(
+                            config
+                                .gpu_visible_devices
+                                .as_deref()
+                                .or(env_visible.as_deref()),
+                        ),
+                        mig_config_filter: build_filter(
+                            config
+                                .mig_config_devices
+                                .as_deref()
+                                .or(env_mig_config.as_deref()),
+                        ),
+                        k8s_mode: config.k8s_mode,
+                        resource_prefix: if config.k8s_mode {
+                            "nvidia.com"
+                        } else {
+                            "esnode.co"
                         },
-                        Some(format!("GPU collector disabled: {}", e)),
-                    )
-                }
+                        enable_amd: config.enable_gpu_amd,
+                        #[cfg(all(feature = "gpu", target_os = "linux"))]
+                        event_rx: None,
+                        status,
+                    },
+                    Some(format!("GPU collector disabled: {}", e)),
+                ),
             }
         }
 
@@ -218,10 +216,7 @@ impl Collector for GpuCollector {
                             .set(ev.ts_ms as f64);
                         match ev.kind.as_str() {
                             "xid" => {
-                                metrics
-                                    .gpu_xid_errors_total
-                                    .with_label_values(labels)
-                                    .inc();
+                                metrics.gpu_xid_errors_total.with_label_values(labels).inc();
                                 metrics
                                     .gpu_last_xid_code
                                     .with_label_values(labels)
@@ -257,12 +252,16 @@ impl Collector for GpuCollector {
             let events_enabled = self.enable_events;
             #[cfg(not(target_os = "linux"))]
             if events_enabled {
-                tracing::debug!("GPU event polling requested but not supported on this platform; skipping");
+                tracing::debug!(
+                    "GPU event polling requested but not supported on this platform; skipping"
+                );
             }
             for idx in 0..count {
                 let device = nvml.device_by_index(idx)?;
                 let gpu_label = idx.to_string();
-                let uuid_string = device.uuid().unwrap_or_else(|_| format!("GPU-{}", gpu_label));
+                let uuid_string = device
+                    .uuid()
+                    .unwrap_or_else(|_| format!("GPU-{}", gpu_label));
                 if let Some(filter) = &self.visible_filter {
                     if !filter.contains(&uuid_string) && !filter.contains(&gpu_label) {
                         continue;
@@ -526,7 +525,11 @@ impl Collector for GpuCollector {
                     metrics
                         .gpu_ecc_mode
                         .with_label_values(&[uuid_label, gpu_label.as_str()])
-                        .set(if ecc_state.currently_enabled { 1.0 } else { 0.0 });
+                        .set(if ecc_state.currently_enabled {
+                            1.0
+                        } else {
+                            0.0
+                        });
                     health.ecc_mode = Some(if ecc_state.currently_enabled {
                         "enabled".to_string()
                     } else {
@@ -608,8 +611,8 @@ impl Collector for GpuCollector {
                             crate::nvml_ext::field::FI_DEV_PCIE_COUNT_FATAL_ERROR,
                         ],
                     ) {
-                        if let Some(corr) =
-                            field_vals.get(crate::nvml_ext::field::FI_DEV_PCIE_COUNT_CORRECTABLE_ERRORS)
+                        if let Some(corr) = field_vals
+                            .get(crate::nvml_ext::field::FI_DEV_PCIE_COUNT_CORRECTABLE_ERRORS)
                         {
                             metrics
                                 .gpu_pcie_correctable_errors_total
@@ -628,7 +631,8 @@ impl Collector for GpuCollector {
                             .with_label_values(&[uuid_label, gpu_label.as_str()])
                             .inc_by(uncorrectable);
                     }
-                    if let Ok(ext) = crate::nvml_ext::pcie_ext_counters(unsafe { device.handle() }) {
+                    if let Ok(ext) = crate::nvml_ext::pcie_ext_counters(unsafe { device.handle() })
+                    {
                         if let Some(c) = ext.correctable_errors {
                             metrics
                                 .gpu_pcie_correctable_errors_total
@@ -876,7 +880,8 @@ impl Collector for GpuCollector {
                                     .set(1.0);
                             }
                             for mig in &migs.devices {
-                                let mig_label = mig.uuid.as_deref().unwrap_or(mig.id.to_string().as_str());
+                                let mig_label =
+                                    mig.uuid.as_deref().unwrap_or(mig.id.to_string().as_str());
                                 let compat_label = if self.k8s_mode {
                                     k8s_resource_name(
                                         self.resource_prefix,
@@ -966,8 +971,9 @@ impl Collector for GpuCollector {
                                     }
                                 }
                                 // Best-effort per-MIG ECC and BAR1 info using MIG device handle
-                                if let Ok(corrected) =
-                                    mig.device.total_ecc_errors(MemoryError::Corrected, EccCounter::Volatile)
+                                if let Ok(corrected) = mig
+                                    .device
+                                    .total_ecc_errors(MemoryError::Corrected, EccCounter::Volatile)
                                 {
                                     metrics
                                         .mig_ecc_corrected_total
@@ -988,10 +994,10 @@ impl Collector for GpuCollector {
                                             .inc_by(corrected);
                                     }
                                 }
-                                if let Ok(uncorrected) = mig
-                                    .device
-                                    .total_ecc_errors(MemoryError::Uncorrected, EccCounter::Volatile)
-                                {
+                                if let Ok(uncorrected) = mig.device.total_ecc_errors(
+                                    MemoryError::Uncorrected,
+                                    EccCounter::Volatile,
+                                ) {
                                     metrics
                                         .mig_ecc_uncorrected_total
                                         .with_label_values(&[
@@ -1098,20 +1104,20 @@ impl Collector for GpuCollector {
                     for _ in 0..32 {
                         match es.wait(0) {
                             Ok(ev) => {
-                            let ev_uuid =
-                                ev.device.uuid().unwrap_or_else(|_| "unknown".to_string());
-                            let index_label = uuid_to_index
-                                .get(&ev_uuid)
-                                .cloned()
-                                .unwrap_or_else(|| "unknown".to_string());
-                            let event =
-                                if ev.event_type.contains(EventTypes::CRITICAL_XID_ERROR) {
+                                let ev_uuid =
+                                    ev.device.uuid().unwrap_or_else(|_| "unknown".to_string());
+                                let index_label = uuid_to_index
+                                    .get(&ev_uuid)
+                                    .cloned()
+                                    .unwrap_or_else(|| "unknown".to_string());
+                                let event = if ev
+                                    .event_type
+                                    .contains(EventTypes::CRITICAL_XID_ERROR)
+                                {
                                     "xid"
-                                } else if ev.event_type.contains(EventTypes::SINGLE_BIT_ECC_ERROR)
-                                {
+                                } else if ev.event_type.contains(EventTypes::SINGLE_BIT_ECC_ERROR) {
                                     "ecc_single"
-                                } else if ev.event_type.contains(EventTypes::DOUBLE_BIT_ECC_ERROR)
-                                {
+                                } else if ev.event_type.contains(EventTypes::DOUBLE_BIT_ECC_ERROR) {
                                     "ecc_double"
                                 } else if ev.event_type.contains(EventTypes::PSTATE_CHANGE) {
                                     "pstate"
@@ -1120,13 +1126,13 @@ impl Collector for GpuCollector {
                                 } else {
                                     "other"
                                 };
-                            let labels = &[ev_uuid.as_str(), index_label.as_str(), event];
-                            metrics.gpu_events_total.with_label_values(labels).inc();
-                            if event == "xid" {
-                                metrics.gpu_xid_errors_total.with_label_values(labels).inc();
-                                // record last XID in health if we tracked mapping
+                                let labels = &[ev_uuid.as_str(), index_label.as_str(), event];
+                                metrics.gpu_events_total.with_label_values(labels).inc();
+                                if event == "xid" {
+                                    metrics.gpu_xid_errors_total.with_label_values(labels).inc();
+                                    // record last XID in health if we tracked mapping
+                                }
                             }
-                        }
                             Err(NvmlError::Timeout) => break,
                             Err(_) => break,
                         }
@@ -1171,25 +1177,22 @@ fn pcie_lane_bytes_per_sec(speed: PcieLinkMaxSpeed) -> f64 {
 
 #[cfg(feature = "gpu")]
 fn build_filter(raw: Option<&str>) -> Option<HashSet<String>> {
-    raw.filter(|s| !s.is_empty() && *s != "all")
-        .map(|s| {
-            s.split(',')
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-                .collect()
-        })
+    raw.filter(|s| !s.is_empty() && *s != "all").map(|s| {
+        s.split(',')
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect()
+    })
 }
 
 #[cfg(all(feature = "gpu", feature = "gpu-nvml-ffi"))]
-fn collect_mig_devices(
-    nvml: &Nvml,
-    parent: &nvml_wrapper::Device,
-) -> Result<MigTree> {
+fn collect_mig_devices(nvml: &Nvml, parent: &nvml_wrapper::Device) -> Result<MigTree> {
     use std::os::raw::{c_int, c_uint};
     let mut current_mode: c_uint = 0;
     let mut pending: c_uint = 0;
     let parent_handle = unsafe { parent.handle() };
-    let mig_mode_res = unsafe { nvmlDeviceGetMigMode(parent_handle, &mut current_mode, &mut pending) };
+    let mig_mode_res =
+        unsafe { nvmlDeviceGetMigMode(parent_handle, &mut current_mode, &mut pending) };
     let supported = mig_mode_res == nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS;
     if !supported {
         return Ok(MigTree {
@@ -1210,14 +1213,20 @@ fn collect_mig_devices(
     let mut ci_nodes: Vec<ComputeInstanceNode> = Vec::new();
     for idx in 0..max_count {
         let mut mig_handle = std::ptr::null_mut();
-        let res = unsafe { nvmlDeviceGetMigDeviceHandleByIndex(parent_handle, idx, &mut mig_handle) };
+        let res =
+            unsafe { nvmlDeviceGetMigDeviceHandleByIndex(parent_handle, idx, &mut mig_handle) };
         if res != nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS {
             continue;
         }
         // Obtain full device handle for MIG to use safe wrapper methods where possible.
         let mut full_handle = std::ptr::null_mut();
-        let _ = unsafe { nvmlDeviceGetDeviceHandleFromMigDeviceHandle(mig_handle, &mut full_handle) };
-        let handle_to_use = if !full_handle.is_null() { full_handle } else { mig_handle };
+        let _ =
+            unsafe { nvmlDeviceGetDeviceHandleFromMigDeviceHandle(mig_handle, &mut full_handle) };
+        let handle_to_use = if !full_handle.is_null() {
+            full_handle
+        } else {
+            mig_handle
+        };
         let mig_device = unsafe { nvml_wrapper::Device::new(handle_to_use, nvml) };
         let mig_uuid = mig_device.uuid().ok();
         let mem_info = mig_device.memory_info().ok();
@@ -1225,8 +1234,12 @@ fn collect_mig_devices(
         let sm_count = mig_device.multi_processor_count().ok();
         let mut gi_id: c_uint = 0;
         let mut ci_id: c_uint = 0;
-        let _ = unsafe { nvml_wrapper_sys::bindings::nvmlDeviceGetGpuInstanceId(mig_handle, &mut gi_id) };
-        let _ = unsafe { nvml_wrapper_sys::bindings::nvmlDeviceGetComputeInstanceId(mig_handle, &mut ci_id) };
+        let _ = unsafe {
+            nvml_wrapper_sys::bindings::nvmlDeviceGetGpuInstanceId(mig_handle, &mut gi_id)
+        };
+        let _ = unsafe {
+            nvml_wrapper_sys::bindings::nvmlDeviceGetComputeInstanceId(mig_handle, &mut ci_id)
+        };
         // Populate GI info best-effort
         if gi_id > 0 && !gi_map.contains_key(&gi_id) {
             let mut gi_handle = std::ptr::null_mut();
@@ -1240,7 +1253,9 @@ fn collect_mig_devices(
             {
                 let mut gi_info: nvml_wrapper_sys::bindings::nvmlGpuInstanceInfo_t =
                     unsafe { std::mem::zeroed() };
-                let _ = unsafe { nvml_wrapper_sys::bindings::nvmlGpuInstanceGetInfo(gi_handle, &mut gi_info) };
+                let _ = unsafe {
+                    nvml_wrapper_sys::bindings::nvmlGpuInstanceGetInfo(gi_handle, &mut gi_info)
+                };
                 let placement = Some(format!(
                     "{}:slice{}",
                     gi_info.placement.sliceId, gi_info.placement.instanceSliceId
@@ -1257,7 +1272,9 @@ fn collect_mig_devices(
                     let mut ci_handle = std::ptr::null_mut();
                     if unsafe {
                         nvml_wrapper_sys::bindings::nvmlGpuInstanceGetComputeInstanceById(
-                            gi_handle, ci_id, &mut ci_handle,
+                            gi_handle,
+                            ci_id,
+                            &mut ci_handle,
                         )
                     } == nvml_wrapper_sys::bindings::nvmlReturn_enum_NVML_SUCCESS
                     {

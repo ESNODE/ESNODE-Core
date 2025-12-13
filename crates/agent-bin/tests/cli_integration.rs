@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    io::Write,
-    net::TcpListener,
-    thread,
-};
+use std::{fs, io::Write, net::TcpListener, thread};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::str::contains;

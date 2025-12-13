@@ -589,7 +589,10 @@ impl MetricsRegistry {
             GPU_LABELS,
         )?;
         let gpu_pstate = GaugeVec::new(
-            Opts::new("esnode_gpu_pstate", "Current GPU performance state (P0..P15)"),
+            Opts::new(
+                "esnode_gpu_pstate",
+                "Current GPU performance state (P0..P15)",
+            ),
             GPU_LABELS,
         )?;
         let gpu_bar1_used_bytes = GaugeVec::new(
@@ -704,11 +707,17 @@ impl MetricsRegistry {
             MIG_LABELS,
         )?;
         let mig_bar1_total_bytes = GaugeVec::new(
-            Opts::new("esnode_mig_bar1_total_bytes", "BAR1 total bytes per MIG device"),
+            Opts::new(
+                "esnode_mig_bar1_total_bytes",
+                "BAR1 total bytes per MIG device",
+            ),
             MIG_LABELS,
         )?;
         let mig_bar1_used_bytes = GaugeVec::new(
-            Opts::new("esnode_mig_bar1_used_bytes", "BAR1 used bytes per MIG device"),
+            Opts::new(
+                "esnode_mig_bar1_used_bytes",
+                "BAR1 used bytes per MIG device",
+            ),
             MIG_LABELS,
         )?;
         let gpu_mig_supported = GaugeVec::new(
@@ -744,7 +753,15 @@ impl MetricsRegistry {
                 "esnode_mig_compute_instance_info",
                 "MIG Compute instance info (profile/placement labels, value=1)",
             ),
-            &["gpu_uuid", "gpu_index", "gi", "ci", "profile", "eng_profile", "placement"],
+            &[
+                "gpu_uuid",
+                "gpu_index",
+                "gi",
+                "ci",
+                "profile",
+                "eng_profile",
+                "placement",
+            ],
         )?;
         let pcie_bandwidth_percent = GaugeVec::new(
             Opts::new(

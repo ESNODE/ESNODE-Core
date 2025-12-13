@@ -109,7 +109,10 @@ impl Orchestrator {
     pub fn new(initial_devices: Vec<Device>, config: OrchestratorConfig) -> Self {
         Self {
             config,
-            devices: initial_devices.into_iter().map(|d| (d.id.clone(), d)).collect(),
+            devices: initial_devices
+                .into_iter()
+                .map(|d| (d.id.clone(), d))
+                .collect(),
             pending_tasks: VecDeque::new(),
             alpha_perf: 1.0,
             beta_energy: 0.7,
@@ -326,4 +329,3 @@ pub async fn run_loop(state: AppState) {
         orch.tick();
     }
 }
-

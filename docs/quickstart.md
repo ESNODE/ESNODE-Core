@@ -115,7 +115,7 @@ node_power_envelope_watts = 1200.0
 log_level = "info"
 # Optional on-agent TSDB buffer for short-term history/backfill (disabled by default)
 # enable_local_tsdb = true
-# local_tsdb_path = "/var/lib/esnode/tsdb"
+# local_tsdb_path = "~/.local/share/esnode/tsdb"  # defaults to XDG_DATA_HOME/esnode/tsdb if unset
 # local_tsdb_retention_hours = 48
 # local_tsdb_max_disk_mb = 2048
 # Optional control-plane attachment (managed mode)
@@ -142,6 +142,8 @@ ESNODE_CONFIG=/etc/esnode/esnode.toml esnode-core
 ```
 
 > Adjust the actual env var name once you define it in code (e.g. `ESNODE_CONFIG`).
+
+Note on TSDB path: by default the agent now resolves `local_tsdb_path` to `$XDG_DATA_HOME/esnode/tsdb` or `~/.local/share/esnode/tsdb` to avoid root-only directories. If you prefer `/var/lib/esnode/tsdb`, set it explicitly and pre-create the directory with writable permissions for the agent user.
 
 ### 3.2 Common CLI flags (suggested)
 
