@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn pcie_ext_stub_compiles() {
-        let res = pcie_ext_counters(std::ptr::null_mut());
+        let res = unsafe { pcie_ext_counters(std::ptr::null_mut()) };
         assert!(res.is_err());
     }
 
